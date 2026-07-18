@@ -1,118 +1,116 @@
 # ComfyCloudHybrid
 
-**Subgraph Blueprints als Cloud-Nodes:** Dieses Custom-Node-Paket registriert für
-jeden ComfyUI Subgraph Blueprint eine eigene Node („☁ <Name>") mit exakt den
-Inputs/Outputs des Subgraphs. Bei Ausführung läuft der Subgraph auf der
-offiziellen [Comfy Cloud](https://www.comfy.org/cloud) — Input-Bilder werden
-automatisch hochgeladen, der Job wird gepollt, die Ergebnis-Bilder kommen als
-Tensor zurück in den lokalen Graphen. Hybrides Offloading wie bei Partner-Nodes,
-aber für eigene Subgraphs.
+**Subgraph Blueprints as cloud nodes:** This custom-node pack registers a
+dedicated node ("☁ <Name>") for every ComfyUI Subgraph Blueprint, exposing
+exactly the subgraph's inputs/outputs. On execution the subgraph runs on the
+official [Comfy Cloud](https://www.comfy.org/cloud) — input images are uploaded
+automatically, the job is polled, and the result images come back as tensors
+into your local graph. Hybrid offloading like the partner nodes, but for your
+own subgraphs.
 
-## Voraussetzungen
+## Requirements
 
-- ComfyUI ≥ 0.5.0 (async Node-Execution + V3-API)
-- **Comfy Cloud Abo** (Standard/Creator/Pro — der Free-Tier hat keinen API-Zugang)
-- API-Key von der [Comfy Dev Platform](https://platform.comfy.org/profile/api-keys)
-  (Profile → API Keys → New; der Key ist **nur einmal** sichtbar — direkt kopieren)
+- ComfyUI ≥ 0.5.0 (async node execution + V3 API)
+- **Comfy Cloud subscription** (Standard/Creator/Pro — the free tier has no API access)
+- API key from the [Comfy Dev Platform](https://platform.comfy.org/profile/api-keys)
+  (Profile → API Keys → New; the key is shown **only once** — copy it right away)
 
 ## Installation
 
 ```bash
 cd <ComfyUI>/custom_nodes
 git clone https://github.com/philipkrueger/ComfyCloudHybrid
-# ComfyUI neu starten
+# restart ComfyUI
 ```
 
-API-Key setzen — eine der beiden Varianten:
+Set the API key — either of the two options:
 
-1. **Settings → Comfy Cloud Hybrid → API key** (wird serverseitig in
-   `config.json` gespeichert, landet nie in den Frontend-Settings). Die
-   Key-Seite lässt sich direkt öffnen: Command-Palette →
-   „Comfy Cloud: Open API key page". Oder:
-2. Umgebungsvariable `COMFY_CLOUD_API_KEY` (hat Vorrang).
+1. **Settings → Comfy Cloud Hybrid → API key** (stored server-side in
+   `config.json`, never lands in the frontend settings). The key page can be
+   opened directly: Command Palette → "Comfy Cloud: Open API key page". Or:
+2. Environment variable `COMFY_CLOUD_API_KEY` (takes precedence).
 
-Verbindung prüfen: Command-Palette → „Comfy Cloud: Test connection".
-Die Settings-Oberfläche und alle Statusanzeigen sind auf Englisch.
+Check the connection: Command Palette → "Comfy Cloud: Test connection".
 
-## Blueprint-Quellen
+## Blueprint sources
 
-Beim Start werden alle Blueprints gescannt und konvertiert (Präzedenz von oben
-nach unten, Dedupe über die Subgraph-UUID):
+On startup all blueprints are scanned and converted (precedence top to bottom,
+deduplicated by the subgraph UUID):
 
-1. `user/<id>/subgraphs/*.json` — selbst veröffentlichte Blueprints
-   (Subgraph auswählen → „Add Subgraph to Library")
-2. `custom_nodes/*/subgraphs/*.json` — von Node-Packs mitgelieferte
-3. `<ComfyUI>/blueprints/*.json` — von neueren ComfyUI-Versionen ausgelieferte
-4. `blueprints_curated/` — die offizielle kuratierte Sammlung
+1. `user/<id>/subgraphs/*.json` — your own published blueprints
+   (select a subgraph → "Add Subgraph to Library")
+2. `custom_nodes/*/subgraphs/*.json` — shipped by node packs
+3. `<ComfyUI>/blueprints/*.json` — shipped by newer ComfyUI versions
+4. `blueprints_curated/` — the official curated collection
    [Comfy-Org/Subgraph-Blueprints](https://github.com/Comfy-Org/Subgraph-Blueprints)
-   (100+ Blueprints inkl. `cloud_only/`). **Ist bereits im Repo enthalten** — ein
-   frischer Clone zeigt die Cloud-Nodes sofort. Auf den neuesten Stand von Comfy-Org
-   bringen (optional):
+   (100+ blueprints incl. `cloud_only/`). **Already bundled in this repo** — a
+   fresh clone shows the cloud nodes immediately. To pull the latest from
+   Comfy-Org (optional):
 
    ```bash
    python scripts/sync_blueprints.py
    ```
 
-Die Nodes erscheinen unter **cloud hybrid/** in der Node-Library — einsortiert
-in die offizielle Blueprint-Taxonomie aus der Subgraph-Definition (z. B.
-`Image generation and editing/Text to image`). **Modellfreie Blueprints**
-(GLSL-Filter, Crops, reine Utilities) werden standardmäßig übersprungen, weil
-sie lokal schneller und kostenlos laufen — abschaltbar über Settings →
-Comfy Cloud Hybrid → „Skip model-free blueprints".
-Nach dem Sync: Command-Palette → „Comfy Cloud: Rescan blueprints";
-**neue** Nodes erscheinen nach einem ComfyUI-Neustart (geänderte Blueprints
-werden ohne Neustart hot übernommen).
+The nodes appear under **cloud hybrid/** in the node library — sorted into the
+official blueprint taxonomy from the subgraph definition (e.g.
+`Image generation and editing/Text to image`). **Model-free blueprints**
+(GLSL filters, crops, pure utilities) are skipped by default because they run
+faster and for free locally — toggleable via Settings → Comfy Cloud Hybrid →
+"Skip model-free blueprints".
+After a sync: Command Palette → "Comfy Cloud: Rescan blueprints";
+**new** nodes appear after a ComfyUI restart (changed blueprints are picked up
+hot without a restart).
 
 ## Nodes
 
-- **☁ <Blueprint-Name>** — pro Blueprint generiert. Subgraph-Inputs (IMAGE/MASK/
-  STRING/INT/FLOAT/BOOLEAN) werden echte Node-Inputs; promotete Widgets (z. B.
-  seed) werden optionale Widgets. IMAGE-Outputs kommen als Tensor zurück.
-  Intern referenzierte Dateien (fixe `LoadImage`) werden automatisch mit
-  hochgeladen (Upload-Dedupe per Inhalts-Hash).
-- **☁ Cloud Workflow ausführen** — generischer Fallback: beliebiges API-Format-
-  JSON (File → Export (API)) plus bis zu 4 Bild-Inputs über die Platzhalter
+- **☁ <Blueprint name>** — generated per blueprint. Subgraph inputs (IMAGE/MASK/
+  STRING/INT/FLOAT/BOOLEAN) become real node inputs; promoted widgets (e.g.
+  seed) become optional widgets. IMAGE outputs come back as tensors.
+  Internally referenced files (fixed `LoadImage`) are uploaded automatically
+  (upload dedupe by content hash).
+- **☁ Run Cloud Workflow** — generic fallback: any API-format JSON
+  (File → Export (API)) plus up to 4 image inputs via the placeholders
   `%CCH_IMAGE_1%`…`%CCH_IMAGE_4%`.
 
-## Grenzen & Verhalten
+## Limits & behavior
 
-- Eingänge: IMAGE/MASK und Wert-Typen (STRING/INT/FLOAT/BOOLEAN/COMBO).
-  Ausgänge: IMAGE und **VIDEO** (via SaveVideo, kommt als VIDEO zurück).
-  LATENT/MODEL/CLIP- und AUDIO-Grenzen werden mit klarer Meldung abgelehnt.
-- Kosten: Nach dem Job zeigt die Node die **GPU-Zeit** (Abrechnungsbasis der
-  Cloud) an — die API liefert keine exakten Credits, die GPU-Sekunden sind die
-  ehrliche Näherung. Statusanzeigen und Fehlermeldungen sind auf Englisch.
-- Blueprints, die Nodes verwenden, die es in der Cloud nicht gibt, werden als
-  deaktivierte Nodes mit Fehlgrund registriert (abschaltbar via
+- Inputs: IMAGE/MASK and value types (STRING/INT/FLOAT/BOOLEAN/COMBO).
+  Outputs: IMAGE and **VIDEO** (via SaveVideo, returned as VIDEO).
+  LATENT/MODEL/CLIP and AUDIO boundaries are rejected with a clear message.
+- Cost: after the job the node shows the **GPU time** (the cloud's billing
+  basis) — the API does not expose exact credits, so GPU seconds are the honest
+  approximation. Status displays and error messages are in English.
+- Blueprints using nodes that don't exist in the cloud are registered as
+  disabled nodes with the failure reason (toggleable via
   `register_unavailable`).
-- Partner-/API-Nodes im Blueprint (z. B. Gemini) laufen in der Cloud unter
-  deinem Account und verbrauchen Credits.
-- Lokaler Interrupt (Stop-Button) bricht auch den Cloud-Job ab.
-- **Fortschritt:** Die Node zeigt Warten und Rendern getrennt an — „⏳ Warte auf
-  Cloud-Worker" solange kein Worker zugeteilt ist, danach echten Render-Fortschritt
-  in Prozent (via Cloud-WebSocket). Zwei getrennte Timeouts: das **Warte-Timeout**
-  (Default 900 s) bricht ab, solange noch keine Render-Credits verbraucht wurden;
-  das **Job-Timeout** (Default 1800 s) zählt erst ab Render-Start — ein langer
-  Queue-Stau killt also keinen fast fertigen Job mehr.
-- Fehler kommen mit klaren Meldungen: ungültiger Key (401), zu wenig Credits
-  (402), inaktives Abo (429), Node-Validierungsfehler mit Klassenname.
+- Partner/API nodes in a blueprint (e.g. Gemini) run in the cloud under your
+  account and consume credits.
+- A local interrupt (Stop button) also cancels the cloud job.
+- **Progress:** the node shows waiting and rendering separately — "⏳ Waiting for
+  cloud worker" while no worker is assigned, then real render progress in percent
+  (via cloud WebSocket). Two separate timeouts: the **wait timeout**
+  (default 900 s) aborts while no render credits have been spent yet; the
+  **job timeout** (default 1800 s) only counts from render start — so a long
+  queue backlog no longer kills an almost-finished job.
+- Errors come with clear messages: invalid key (401), insufficient credits
+  (402), inactive subscription (429), node validation errors with the class name.
 
-## Entwicklung
+## Development
 
 ```bash
-# Offline-Tests (kein Netz, keine Credits):
+# Offline tests (no network, no credits):
 python -m unittest discover tests
 ```
 
-Architektur und Regeln: siehe [CLAUDE.md](CLAUDE.md).
+Architecture and rules: see [CLAUDE.md](CLAUDE.md).
 
-## Mitwirken
+## Contributing
 
-Issues und Pull Requests sind willkommen. Bitte vor einem PR die Offline-Tests laufen
-lassen (`python -m unittest discover tests`) — sie brauchen kein Netz und kosten keine
-Credits. Architektur-Überblick, Modul-Verantwortlichkeiten und die harten Projektregeln
-stehen in [CLAUDE.md](CLAUDE.md).
+Issues and pull requests are welcome. Please run the offline tests before opening
+a PR (`python -m unittest discover tests`) — they need no network and cost no
+credits. An architecture overview, module responsibilities, and the hard project
+rules live in [CLAUDE.md](CLAUDE.md).
 
-## Lizenz
+## License
 
 [MIT](LICENSE) © Philip Krüger
