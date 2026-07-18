@@ -1,0 +1,23 @@
+# Secrets & runtime state — never commit
+config.json
+cache/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editors & tooling
+.idea/
+.vscode/
+.claude/settings.local.json
+*.log
+
+# OS
+.DS_Store

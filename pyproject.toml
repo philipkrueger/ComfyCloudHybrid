@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=70.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "comfycloudhybrid"
+version = "0.1.0"
+description = "Run ComfyUI Subgraph Blueprints on Comfy Cloud — hybrid local/cloud execution, one node per blueprint."
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/philipkrueger/ComfyCloudHybrid"
+BugTracker = "https://github.com/philipkrueger/ComfyCloudHybrid/issues"
+
+[tool.comfy]
+PublisherId = "philipkrueger"
+DisplayName = "Comfy Cloud Hybrid"
+Tags = ["cloud", "subgraph", "blueprint", "api"]
+requires-comfyui = ">=0.5.0"

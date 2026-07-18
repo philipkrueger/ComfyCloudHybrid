@@ -1,0 +1,80 @@
+{
+  "revision": 0,
+  "last_node_id": 99,
+  "last_link_id": 0,
+  "nodes": [
+    {
+      "id": 99,
+      "type": "aaaaaaaa-0000-0000-0000-000000000001",
+      "pos": [0, 0],
+      "inputs": [{"name": "image", "type": "IMAGE", "link": null}],
+      "outputs": [{"name": "IMAGE", "type": "IMAGE", "links": []}],
+      "properties": {},
+      "widgets_values": [],
+      "title": "Nested Demo"
+    }
+  ],
+  "links": [],
+  "version": 0.4,
+  "definitions": {
+    "subgraphs": [
+      {
+        "id": "aaaaaaaa-0000-0000-0000-000000000001",
+        "version": 1,
+        "name": "Nested Demo",
+        "category": "Image Tools/Test",
+        "inputNode": {"id": -10},
+        "outputNode": {"id": -20},
+        "inputs": [{"id": "i1", "name": "image", "type": "IMAGE", "linkIds": [10]}],
+        "outputs": [{"id": "o1", "name": "IMAGE", "type": "IMAGE", "linkIds": [11]}],
+        "widgets": [],
+        "nodes": [
+          {
+            "id": 1,
+            "type": "aaaaaaaa-0000-0000-0000-000000000002",
+            "inputs": [{"name": "image", "type": "IMAGE", "link": 10}],
+            "outputs": [{"name": "IMAGE", "type": "IMAGE", "links": [11]}],
+            "properties": {},
+            "widgets_values": []
+          }
+        ],
+        "groups": [],
+        "links": [
+          {"id": 10, "origin_id": -10, "origin_slot": 0, "target_id": 1, "target_slot": 0, "type": "IMAGE"},
+          {"id": 11, "origin_id": 1, "origin_slot": 0, "target_id": -20, "target_slot": 0, "type": "IMAGE"}
+        ],
+        "extra": {}
+      },
+      {
+        "id": "aaaaaaaa-0000-0000-0000-000000000002",
+        "version": 1,
+        "name": "Inner Proc",
+        "inputNode": {"id": -10},
+        "outputNode": {"id": -20},
+        "inputs": [{"id": "i2", "name": "image", "type": "IMAGE", "linkIds": [20]}],
+        "outputs": [{"id": "o2", "name": "IMAGE", "type": "IMAGE", "linkIds": [21]}],
+        "widgets": [],
+        "nodes": [
+          {
+            "id": 5,
+            "type": "FakeProc",
+            "inputs": [
+              {"name": "image", "type": "IMAGE", "link": 20},
+              {"name": "strength", "type": "FLOAT", "widget": {"name": "strength"}, "link": null}
+            ],
+            "outputs": [{"name": "IMAGE", "type": "IMAGE", "links": [21]}],
+            "properties": {},
+            "widgets_values": [0.5]
+          }
+        ],
+        "groups": [],
+        "links": [
+          {"id": 20, "origin_id": -10, "origin_slot": 0, "target_id": 5, "target_slot": 0, "type": "IMAGE"},
+          {"id": 21, "origin_id": 5, "origin_slot": 0, "target_id": -20, "target_slot": 0, "type": "IMAGE"}
+        ],
+        "extra": {}
+      }
+    ]
+  },
+  "extra": {"BlueprintDescription": "Nested test blueprint"}
+}

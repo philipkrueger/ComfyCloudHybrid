@@ -1,0 +1,61 @@
+{
+  "revision": 0,
+  "last_node_id": 50,
+  "last_link_id": 0,
+  "nodes": [
+    {
+      "id": 50,
+      "type": "bbbbbbbb-0000-0000-0000-000000000001",
+      "pos": [0, 0],
+      "inputs": [{"name": "image", "type": "IMAGE", "link": null}],
+      "outputs": [{"name": "VIDEO", "type": "VIDEO", "links": []}],
+      "properties": {"proxyWidgets": [["10", "value"], ["20", "fps"]]},
+      "widgets_values": [],
+      "title": "Tiny Video"
+    }
+  ],
+  "links": [],
+  "version": 0.4,
+  "definitions": {
+    "subgraphs": [
+      {
+        "id": "bbbbbbbb-0000-0000-0000-000000000001",
+        "version": 1,
+        "name": "Tiny Video",
+        "inputNode": {"id": -10},
+        "outputNode": {"id": -20},
+        "inputs": [{"id": "vi1", "name": "image", "type": "IMAGE", "linkIds": [1]}],
+        "outputs": [{"id": "vo1", "name": "VIDEO", "type": "VIDEO", "linkIds": [3]}],
+        "widgets": [],
+        "nodes": [
+          {
+            "id": 10,
+            "type": "PrimitiveInt",
+            "inputs": [{"name": "value", "type": "INT", "widget": {"name": "value"}, "link": null}],
+            "outputs": [{"name": "INT", "type": "INT", "links": []}],
+            "properties": {},
+            "widgets_values": [768, "fixed"]
+          },
+          {
+            "id": 20,
+            "type": "CreateVideo",
+            "inputs": [
+              {"name": "images", "type": "IMAGE", "link": 1},
+              {"name": "fps", "type": "FLOAT", "widget": {"name": "fps"}, "link": null}
+            ],
+            "outputs": [{"name": "VIDEO", "type": "VIDEO", "links": [3]}],
+            "properties": {},
+            "widgets_values": [24.0]
+          }
+        ],
+        "groups": [],
+        "links": [
+          {"id": 1, "origin_id": -10, "origin_slot": 0, "target_id": 20, "target_slot": 0, "type": "IMAGE"},
+          {"id": 3, "origin_id": 20, "origin_slot": 0, "target_id": -20, "target_slot": 0, "type": "VIDEO"}
+        ],
+        "extra": {}
+      }
+    ]
+  },
+  "extra": {"BlueprintDescription": "Tiny video test blueprint"}
+}
