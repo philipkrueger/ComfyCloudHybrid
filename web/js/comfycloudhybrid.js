@@ -54,31 +54,87 @@ app.registerExtension({
     settings: [
         {
             id: SETTING_KEY,
-            name: "API key (stored server-side)",
+            name: "API key",
             category: ["Comfy Cloud Hybrid", "Connection", "API Key"],
-            type: "text",
             defaultValue: "",
-            attrs: { type: "password", placeholder: "Paste key from platform.comfy.org" },
-            tooltip: "Create a key on the Comfy Dev Platform: " + API_KEY_URL +
-                " (Profile → API Keys → New). The key is shown only once — paste it " +
-                "here right away. Requires a paid Comfy Cloud plan (Standard/Creator/" +
-                "Pro); the free tier has no API access. The key is sent to your " +
-                "local ComfyUI server immediately and stored in a server-side file — " +
+            tooltip: "Sent to your local ComfyUI server and stored server-side — " +
                 "it never persists in the frontend settings.",
-            onChange: async (value) => {
-                if (!value) return; // initial load / after clearing
-                try {
-                    const result = await postJson("/cloudhybrid/api_key", { api_key: value });
-                    toast("success", "Comfy Cloud",
-                        `API key saved (${result.masked || "ok"}).`);
-                } catch (e) {
-                    toast("error", "Comfy Cloud", `Saving the key failed: ${e}`);
-                    return;
-                }
-                // never persist the key in frontend settings storage
-                try {
-                    await app.extensionManager.setting.set(SETTING_KEY, "");
-                } catch (e) { /* older frontends: value stays until reload */ }
+            // custom renderer: password input + subtle "Get your key here ⓘ"
+            // line underneath (native title tooltips are unreliable inside the
+            // settings dialog, so the info icon gets its own hover element)
+            type: () => {
+                const wrap = document.createElement("div");
+                wrap.style.cssText =
+                    "position:relative;display:flex;flex-direction:column;" +
+                    "align-items:flex-end;gap:.3rem;";
+
+                const input = document.createElement("input");
+                input.type = "password";
+                input.placeholder = "Paste key from platform.comfy.org";
+                input.autocomplete = "off";
+                input.style.cssText =
+                    "width:17rem;padding:.45rem .6rem;border-radius:6px;" +
+                    "border:1px solid var(--p-form-field-border-color,#4a4a52);" +
+                    "background:var(--p-form-field-background,#18181b);" +
+                    "color:inherit;font-size:.85rem;outline:none;";
+                input.addEventListener("change", async () => {
+                    const value = input.value.trim();
+                    if (!value) return;
+                    try {
+                        const result = await postJson("/cloudhybrid/api_key",
+                            { api_key: value });
+                        toast("success", "Comfy Cloud",
+                            `API key saved (${result.masked || "ok"}).`);
+                        input.value = ""; // key never stays in the frontend
+                        input.placeholder = `Key saved (${result.masked || "ok"})`;
+                    } catch (e) {
+                        toast("error", "Comfy Cloud", `Saving the key failed: ${e}`);
+                    }
+                });
+
+                const help = document.createElement("div");
+                help.style.cssText =
+                    "display:flex;align-items:center;gap:.35rem;" +
+                    "font-size:.78rem;opacity:.65;";
+                const label = document.createElement("span");
+                label.append("Get your key ");
+                const link = document.createElement("a");
+                link.href = API_KEY_URL;
+                link.target = "_blank";
+                link.rel = "noopener";
+                link.textContent = "here";
+                link.style.cssText =
+                    "color:var(--p-primary-color,#4f9cf9);" +
+                    "text-decoration:underline;";
+                label.appendChild(link);
+
+                const info = document.createElement("i");
+                info.className = "pi pi-info-circle";
+                info.style.cssText = "cursor:help;";
+
+                const tip = document.createElement("div");
+                tip.textContent =
+                    "Comfy Dev Platform → Profile → API Keys → New.\n" +
+                    "The key is shown only once — paste it right away.\n" +
+                    "Requires a paid Comfy Cloud plan (Standard/Creator/Pro); " +
+                    "the free tier has no API access.";
+                tip.style.cssText =
+                    "position:absolute;top:100%;right:0;margin-top:.3rem;" +
+                    "max-width:270px;padding:.5rem .65rem;border-radius:6px;" +
+                    "background:var(--p-tooltip-background,#2b2b33);color:#eee;" +
+                    "font-size:.75rem;line-height:1.4;white-space:pre-line;" +
+                    "box-shadow:0 2px 10px rgba(0,0,0,.5);display:none;" +
+                    "z-index:2000;text-align:left;";
+                info.addEventListener("mouseenter", () => {
+                    tip.style.display = "block";
+                });
+                info.addEventListener("mouseleave", () => {
+                    tip.style.display = "none";
+                });
+
+                help.append(label, info);
+                wrap.append(input, help, tip);
+                return wrap;
             },
         },
         {
