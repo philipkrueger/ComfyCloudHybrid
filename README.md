@@ -65,7 +65,9 @@ hot without a restart).
 
 - **☁ <Blueprint name>** — generated per blueprint. Subgraph inputs (IMAGE/MASK/
   STRING/INT/FLOAT/BOOLEAN) become real node inputs; promoted widgets (e.g.
-  seed) become optional widgets. IMAGE outputs come back as tensors.
+  seed) become optional widgets. Model selectors (unet/clip/vae/lora names)
+  are dropdowns listing the models actually installed in the cloud (from the
+  cached cloud catalog; refreshed on rescan). IMAGE outputs come back as tensors.
   Internally referenced files (fixed `LoadImage`) are uploaded automatically
   (upload dedupe by content hash).
 - **☁ Run Cloud Workflow** — generic fallback: any API-format JSON

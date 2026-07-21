@@ -23,7 +23,8 @@ from .model import (
     sanitize_id,
 )
 from .schema_source import SchemaSource
-from .widgets import SEED_NAMES, combo_options, map_widgets, widget_inputs_of
+from .widgets import (SEED_NAMES, combo_options, map_widgets,
+                      required_widget_defaults, widget_inputs_of)
 
 log = logging.getLogger("ComfyCloudHybrid")
 
@@ -131,8 +132,11 @@ def convert(blueprint: dict, schemas: SchemaSource, fallback_name: str = "") -> 
         elif "MASK" in parts:
             bi_type = "MASK"
         elif any(p in VALUE_TYPES for p in parts):
-            p = next(p for p in parts if p in VALUE_TYPES)
-            bi_type = "STRING" if p == "COMBO" else p
+            # COMBO slots (model selectors like unet_name) stay COMBO — their
+            # options are resolved from the cloud schema of the target input
+            # after expansion; without resolvable options they fall back to
+            # a free-text STRING below
+            bi_type = next(p for p in parts if p in VALUE_TYPES)
         else:
             raise UnsupportedTypeError(
                 f"Subgraph-Input '{disp}' hat Typ {typ} — nur IMAGE/MASK/STRING/INT/FLOAT/"
@@ -224,6 +228,16 @@ def convert(blueprint: dict, schemas: SchemaSource, fallback_name: str = "") -> 
     for bi in slot_inputs + proxy_inputs:
         if bi.type in ("INT", "FLOAT"):
             _apply_numeric_constraints(bi, ctx.prompt, schemas)
+
+    # COMBO slots (model selectors): pull the option list from the cloud
+    # schema of the target input, so the node offers the actual cloud models
+    # as a dropdown instead of a copy-the-exact-name text field. Without a
+    # cloud catalog (cold start) the slot degrades to free-text STRING.
+    for bi in slot_inputs:
+        if bi.type == "COMBO" and bi.combo_options is None:
+            _apply_combo_options(bi, ctx.prompt, schemas)
+            if not bi.combo_options:
+                bi.type = "STRING"
 
     # -- interior fixed-file uploads ----------------------------------------
     proxied = {(k, i) for bi in proxy_inputs + slot_inputs for (k, i) in bi.targets}
@@ -346,6 +360,16 @@ def _expand(defn: dict, prefix: str, resolve_boundary, ctx: _Ctx,
                     f"Node '{val.get('type')}'")
         if not schemas.in_cloud(n["type"]):
             ctx.missing.add(n["type"])
+        # backfill required inputs the cloud schema gained after this
+        # blueprint was authored (see SDPoseDrawKeypoints.draw_head, added
+        # post-authoring) — the cloud rejects the submit if they're absent,
+        # it does not apply its own defaults for missing inputs
+        for rname, rdefault in required_widget_defaults(schema_entry).items():
+            if rname not in inputs:
+                inputs[rname] = rdefault
+                ctx.warnings.append(
+                    f"'{n['type']}' is missing newer required input '{rname}' "
+                    f"in this blueprint — using the cloud default ({rdefault!r})")
         ctx.prompt[key] = {"class_type": n["type"], "inputs": inputs,
                            "_meta": {"title": n.get("title") or n["type"]}}
 
@@ -405,6 +429,25 @@ def _widget_opts(schema_entry: dict, input_name: str) -> dict | None:
         if nm == input_name:
             return opts
     return None
+
+
+def _apply_combo_options(bi: BoundInput, prompt: dict,
+                         schemas: SchemaSource) -> None:
+    """Resolve a COMBO slot's option list from the CLOUD schema of its
+    target input — e.g. unet_name → UNETLoader.unet_name lists every model
+    installed in the cloud. Cloud-only on purpose: local option lists would
+    offer models the cloud then rejects with value_not_in_list."""
+    for key, iname in bi.targets:
+        cls = (prompt.get(key) or {}).get("class_type")
+        entry = schemas.get_cloud(cls) if cls else None
+        if entry is None:
+            continue
+        for nm, typ, opts in widget_inputs_of(entry):
+            if nm == iname:
+                options = combo_options(typ, opts)
+                if options:
+                    bi.combo_options = options
+                    return
 
 
 def _real_proxy_entries(inst_node: dict, defs: dict, schemas: SchemaSource):

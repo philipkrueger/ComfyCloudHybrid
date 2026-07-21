@@ -289,6 +289,84 @@ class TestVideoOutput(unittest.TestCase):
         self.assertEqual(value.minimum, -2147483648)
 
 
+class TestComboSlots(unittest.TestCase):
+    """Model-selector boundary slots (unet_name etc.) must become dropdowns
+    fed by the cloud catalog, not copy-the-exact-name text fields."""
+
+    def _with_combo_slot(self):
+        bp = load("nested_subgraph.json")
+        outer = bp["definitions"]["subgraphs"][0]
+        inner_def = bp["definitions"]["subgraphs"][1]
+        inner_def["inputs"].append(
+            {"id": "ic1", "name": "preset", "type": "COMBO", "linkIds": [25]})
+        inner_def["nodes"][0]["inputs"].append(
+            {"name": "preset", "type": "COMBO",
+             "widget": {"name": "preset"}, "link": 25})
+        inner_def["links"].append(
+            {"id": 25, "origin_id": -10, "origin_slot": 1,
+             "target_id": 5, "target_slot": 2, "type": "COMBO"})
+        outer["inputs"].append(
+            {"id": "oc1", "name": "preset", "type": "COMBO", "linkIds": [15]})
+        outer["nodes"][0]["inputs"].append(
+            {"name": "preset", "type": "COMBO",
+             "widget": {"name": "preset"}, "link": 15})
+        outer["links"].append(
+            {"id": 15, "origin_id": -10, "origin_slot": 1,
+             "target_id": 1, "target_slot": 1, "type": "COMBO"})
+        return bp
+
+    def test_combo_slot_resolves_cloud_options(self):
+        import copy
+        from schemas import CLOUD_OBJECT_INFO
+        info = copy.deepcopy(CLOUD_OBJECT_INFO)
+        info["FakeProc"]["input"]["required"]["preset"] = (
+            [["fast", "quality"], {"default": "fast"}])
+        cw = convert(self._with_combo_slot(), SchemaSource(info, use_local=False))
+        preset = [i for i in cw.inputs if i.safe_id == "preset"][0]
+        self.assertEqual(preset.type, "COMBO")
+        self.assertEqual(preset.combo_options, ["fast", "quality"])
+        self.assertIn(("99:1:5", "preset"), preset.targets)
+
+    def test_combo_slot_without_cloud_options_falls_back_to_string(self):
+        # target input unknown to the cloud catalog → free-text stays usable
+        cw = convert(self._with_combo_slot(), schemas())
+        preset = [i for i in cw.inputs if i.safe_id == "preset"][0]
+        self.assertEqual(preset.type, "STRING")
+
+
+class TestSchemaDrift(unittest.TestCase):
+    """A class gains a new required input after a blueprint was authored
+    (real case: SDPoseDrawKeypoints.draw_head, added post-authoring — the
+    node's serialized inputs/widgets_values in the blueprint never mention
+    it, and the cloud rejects a submit missing a required input outright)."""
+
+    def test_missing_required_input_backfilled_from_cloud_default(self):
+        import copy
+        from schemas import CLOUD_OBJECT_INFO
+        info = copy.deepcopy(CLOUD_OBJECT_INFO)
+        info["FakeProc"]["input"]["required"]["use_gpu"] = (
+            ["BOOLEAN", {"default": True}])
+        cw = convert(load("nested_subgraph.json"), SchemaSource(info, use_local=False))
+        self.assertEqual(cw.prompt["99:1:5"]["inputs"]["use_gpu"], True)
+        self.assertTrue(any("use_gpu" in w and "cloud default" in w
+                            for w in cw.warnings))
+        # the blueprint stays available — a backfilled default is not a
+        # missing-node situation
+        self.assertEqual(cw.missing_classes, [])
+
+    def test_required_input_without_default_not_backfilled(self):
+        # a required input with NO schema default can't be safely invented —
+        # must be left for the existing missing-class/validation path, not
+        # silently filled with None
+        import copy
+        from schemas import CLOUD_OBJECT_INFO
+        info = copy.deepcopy(CLOUD_OBJECT_INFO)
+        info["FakeProc"]["input"]["required"]["mode"] = (
+            [["a", "b"], {}])  # no "default" key
+        cw = convert(load("nested_subgraph.json"), SchemaSource(info, use_local=False))
+        self.assertNotIn("mode", cw.prompt["99:1:5"]["inputs"])
+
+
 class TestUnavailable(unittest.TestCase):
     def test_missing_class_feeding_executable_node(self):
         bp = load("nested_subgraph.json")

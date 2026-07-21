@@ -47,6 +47,28 @@ def widget_inputs_of(schema_entry: dict) -> list[tuple[str, Any, dict]]:
     return result
 
 
+def required_widget_defaults(schema_entry: dict) -> dict[str, Any]:
+    """{name: default} for REQUIRED widget-backed inputs that carry a schema
+    default. Used to backfill inputs a blueprint's serialized node predates —
+    e.g. a class gains a new required parameter after the blueprint was
+    authored, so the old node's own `inputs`/`widgets_values` never mention
+    it. The cloud validator does not fill defaults for inputs that are
+    missing outright, so leaving them out is a hard submit-time rejection."""
+    inp = schema_entry.get("input") or {}
+    required = inp.get("required") or {}
+    order = (schema_entry.get("input_order") or {}).get("required") or list(required.keys())
+    out = {}
+    for name in order:
+        spec = required.get(name)
+        if not spec:
+            continue
+        typ = spec[0]
+        opts = spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {}
+        if _is_widget(typ, opts) and "default" in opts:
+            out[name] = opts["default"]
+    return out
+
+
 def _is_widget(typ, opts: dict) -> bool:
     if opts.get("forceInput"):
         return False

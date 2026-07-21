@@ -12,6 +12,7 @@ from pathlib import Path
 
 import _path  # noqa: F401
 
+import aiohttp
 from aiohttp import web
 
 from comfycloudhybrid import cache, config
@@ -125,6 +126,66 @@ class GpuSecondsTest(unittest.TestCase):
 
     def test_gpu_seconds_missing(self):
         self.assertIsNone(ComfyCloudClient.gpu_seconds({}))
+
+
+class PollResilienceTest(unittest.IsolatedAsyncioTestCase):
+    """A single flaky poll must never crash the job — verified live: a stale
+    pooled connection hung until the per-request timeout fired and a raw
+    TimeoutError killed a node after 15 minutes of otherwise-healthy polling."""
+
+    async def test_transient_network_error_retried_not_crashed(self):
+        client = ComfyCloudClient("test-key", base_url="http://example.invalid")
+        calls = {"status": 0}
+
+        async def flaky_status(job_id):
+            calls["status"] += 1
+            if calls["status"] <= 2:
+                raise asyncio.TimeoutError("simulated stale connection")
+            return "completed"
+
+        async def fake_detail(job_id):
+            return {"id": job_id, "status": "completed", "outputs": {}}
+
+        closed = {"n": 0}
+        orig_close = client.close
+
+        async def spy_close():
+            closed["n"] += 1
+            await orig_close()
+
+        client.job_status = flaky_status
+        client.job_detail = fake_detail
+        client.close = spy_close
+
+        with self.assertLogs("ComfyCloudHybrid", level="WARNING"):
+            detail = await client.wait_for_job(
+                "job-x", poll_interval=0.01, timeout=30, queue_timeout=30)
+        self.assertEqual(detail["status"], "completed")
+        self.assertEqual(calls["status"], 3)
+        self.assertEqual(closed["n"], 2)  # one forced reconnect per failure
+
+    async def test_persistent_network_error_escalates_after_grace(self):
+        client = ComfyCloudClient("test-key", base_url="http://example.invalid")
+        client._NETWORK_GRACE_S = 0.05  # keep the test fast
+
+        async def always_fails(job_id):
+            raise aiohttp.ClientConnectionError("simulated network down")
+
+        interrupted = {"n": 0}
+
+        async def fake_interrupt(job_id=None):
+            interrupted["n"] += 1
+
+        client.job_status = always_fails
+        client.interrupt = fake_interrupt
+
+        with self.assertRaises(CloudError) as ctx:
+            await client.wait_for_job(
+                "job-y", poll_interval=0.01, timeout=30, queue_timeout=30)
+        self.assertIn("Lost connection", ctx.exception.user_message)
+        # the job itself is left alone — we truly don't know its state, and
+        # cancelling it would waste a job that might have already succeeded
+        self.assertEqual(interrupted["n"], 0)
 
 
 class ExecutorTest(unittest.IsolatedAsyncioTestCase):

@@ -232,6 +232,15 @@ class ComfyCloudClient:
     # loads models, which is not in the documented enum either.
     _RUNNING_STATES = ("in_progress", "running", "executing")
 
+    # How long a run of transient network errors (dropped connection, stale
+    # keep-alive, DNS hiccup) is tolerated before a poll failure escalates to
+    # a real error. A single flaky request must never kill a job that is
+    # likely still succeeding in the cloud — verified live: a stale pooled
+    # connection hung until the per-request timeout fired and the raw
+    # TimeoutError propagated straight out of the node after 15 minutes of
+    # otherwise-healthy polling.
+    _NETWORK_GRACE_S = 120
+
     async def wait_for_job(self, job_id: str, *, poll_interval: float,
                            timeout: float, queue_timeout: float | None = None,
                            on_tick=None, check_interrupted=None) -> dict:
@@ -248,10 +257,30 @@ class ComfyCloudClient:
         loop = asyncio.get_event_loop()
         started = loop.time()
         running_since: float | None = None
+        network_fail_since: float | None = None
         while True:
             if check_interrupted is not None:
                 check_interrupted()
-            status = await self.job_status(job_id)
+            try:
+                status = await self.job_status(job_id)
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                now = loop.time()
+                if network_fail_since is None:
+                    network_fail_since = now
+                failing_for = now - network_fail_since
+                if failing_for > self._NETWORK_GRACE_S:
+                    raise CloudError(
+                        f"Lost connection to Comfy Cloud for {int(failing_for)}s while "
+                        "polling this job. The job itself may still be running or have "
+                        "finished — check platform.comfy.org before resubmitting.") from e
+                log.warning("transient network error polling job %s (failing for %ds) — "
+                           "retrying: %s", job_id, int(failing_for), e)
+                # a poisoned keep-alive connection is the likely culprit — force
+                # a fresh one on the next attempt instead of reusing the pool
+                await self.close()
+                await asyncio.sleep(poll_interval)
+                continue
+            network_fail_since = None
             now = loop.time()
             # /api/job/{id}/status says "success", /api/jobs says "completed" —
             # the cloud uses both enums (verified against live API 2026-07)
