@@ -87,6 +87,8 @@ def _build_output(index: int, bo):
     oid = f"out_{index}_{bo.name}"
     if bo.type == "VIDEO":
         return io.Video.Output(id=oid, display_name=bo.name)
+    if bo.type == "MASK":
+        return io.Mask.Output(id=oid, display_name=bo.name)
     return io.Image.Output(id=oid, display_name=bo.name)
 
 

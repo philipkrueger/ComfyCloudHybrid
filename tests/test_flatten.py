@@ -289,6 +289,34 @@ class TestVideoOutput(unittest.TestCase):
         self.assertEqual(value.minimum, -2147483648)
 
 
+class TestMaskOutput(unittest.TestCase):
+    """A subgraph MASK output must survive conversion: saved via
+    MaskToImage → SaveImage, declared as a MASK output on the node."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cw = convert(load("mask_blueprint.json"), schemas())
+
+    def test_mask_output_is_kept(self):
+        self.assertEqual(len(self.cw.outputs), 1)
+        self.assertEqual(self.cw.outputs[0].type, "MASK")
+
+    def test_mask_saved_via_masktoimage(self):
+        bo = self.cw.outputs[0]
+        save = self.cw.prompt[bo.save_node_key]
+        self.assertEqual(save["class_type"], "SaveImage")
+        # SaveImage pulls from an injected MaskToImage node, not the mask link
+        conv_key = save["inputs"]["images"][0]
+        conv = self.cw.prompt[conv_key]
+        self.assertEqual(conv["class_type"], "MaskToImage")
+        # MaskToImage is fed by the real mask producer (ImageToMask)
+        self.assertEqual(self.cw.prompt[conv["inputs"]["mask"][0]]["class_type"],
+                         "ImageToMask")
+
+    def test_mask_output_does_not_flag_blueprint_unavailable(self):
+        self.assertEqual(self.cw.missing_classes, [])
+
+
 class TestComboSlots(unittest.TestCase):
     """Model-selector boundary slots (unet_name etc.) must become dropdowns
     fed by the cloud catalog, not copy-the-exact-name text fields."""

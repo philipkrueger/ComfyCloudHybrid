@@ -77,8 +77,9 @@ hot without a restart).
 ## Limits & behavior
 
 - Inputs: IMAGE/MASK and value types (STRING/INT/FLOAT/BOOLEAN/COMBO).
-  Outputs: IMAGE and **VIDEO** (via SaveVideo, returned as VIDEO).
-  LATENT/MODEL/CLIP and AUDIO boundaries are rejected with a clear message.
+  Outputs: IMAGE, **MASK** (saved as a grayscale image, returned as a MASK
+  tensor) and **VIDEO** (via SaveVideo, returned as VIDEO). AUDIO, STRING and
+  other value/latent boundaries are skipped with a clear note.
 - Cost: after the job the node shows the **GPU time** (the cloud's billing
   basis) — the API does not expose exact credits, so GPU seconds are the honest
   approximation. Status displays and error messages are in English.

@@ -1,0 +1,53 @@
+{
+  "revision": 0,
+  "last_node_id": 50,
+  "last_link_id": 0,
+  "nodes": [
+    {
+      "id": 50,
+      "type": "cccccccc-0000-0000-0000-000000000001",
+      "pos": [0, 0],
+      "inputs": [{"name": "image", "type": "IMAGE", "link": null}],
+      "outputs": [{"name": "MASK", "type": "MASK", "links": []}],
+      "properties": {},
+      "widgets_values": [],
+      "title": "Tiny Mask"
+    }
+  ],
+  "links": [],
+  "version": 0.4,
+  "definitions": {
+    "subgraphs": [
+      {
+        "id": "cccccccc-0000-0000-0000-000000000001",
+        "version": 1,
+        "name": "Tiny Mask",
+        "inputNode": {"id": -10},
+        "outputNode": {"id": -20},
+        "inputs": [{"id": "mi1", "name": "image", "type": "IMAGE", "linkIds": [1]}],
+        "outputs": [{"id": "mo1", "name": "MASK", "type": "MASK", "linkIds": [3]}],
+        "widgets": [],
+        "nodes": [
+          {
+            "id": 20,
+            "type": "ImageToMask",
+            "inputs": [
+              {"name": "image", "type": "IMAGE", "link": 1},
+              {"name": "channel", "type": "COMBO", "widget": {"name": "channel"}, "link": null}
+            ],
+            "outputs": [{"name": "MASK", "type": "MASK", "links": [3]}],
+            "properties": {},
+            "widgets_values": ["red"]
+          }
+        ],
+        "groups": [],
+        "links": [
+          {"id": 1, "origin_id": -10, "origin_slot": 0, "target_id": 20, "target_slot": 0, "type": "IMAGE"},
+          {"id": 3, "origin_id": 20, "origin_slot": 0, "target_id": -20, "target_slot": 0, "type": "MASK"}
+        ],
+        "extra": {}
+      }
+    ]
+  },
+  "extra": {"BlueprintDescription": "Tiny mask test blueprint"}
+}

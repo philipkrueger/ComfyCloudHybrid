@@ -42,8 +42,9 @@ ausgeführt — Inputs hochladen, Job pollen, Bilder zurückladen.
 
 ## Bekannte Grenzen
 
-- Subgraph-Grenzen: IMAGE/MASK/Werte rein, IMAGE + VIDEO raus. LATENT/MODEL/CLIP
-  und AUDIO-Grenzen nicht unterstützt.
+- Subgraph-Grenzen: IMAGE/MASK/Werte rein, IMAGE + MASK + VIDEO raus (MASK via
+  MaskToImage→SaveImage, Rückgabe als Mask-Tensor). AUDIO/STRING/LATENT/MODEL/
+  CLIP-Ausgänge werden übersprungen (mit Hinweis).
 - Neue Blueprints ⇒ ComfyUI-Neustart (Rescan lädt nur Konvertierungen hot).
 - Nested-Instance-Proxywidgets werden als Defaults eingebacken, nicht promoted.
 - Reroute-Nodes werden beim Flattening kollabiert (PASSTHROUGH_CLASSES in flatten.py).

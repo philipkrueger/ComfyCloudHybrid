@@ -184,13 +184,28 @@ def convert(blueprint: dict, schemas: SchemaSource, fallback_name: str = "") -> 
                            "format": "auto", "codec": "auto"},
                 "_meta": {"title": f"CloudHybrid Output {disp}"},
             }
+        elif typ == "MASK":
+            # a MASK cannot be saved directly — convert it to a grayscale image
+            # first; the executor rebuilds the mask tensor on download
+            # (executor.png_bytes_to_mask, inverse of mask_to_png_bytes)
+            conv_key = f"cch_mask2img_{k}"
+            ctx.prompt[conv_key] = {
+                "class_type": "MaskToImage",
+                "inputs": {"mask": res[1]},
+                "_meta": {"title": f"CloudHybrid MaskToImage {disp}"},
+            }
+            ctx.prompt[save_key] = {
+                "class_type": "SaveImage",
+                "inputs": {"images": [conv_key, 0], "filename_prefix": file_prefix},
+                "_meta": {"title": f"CloudHybrid Output {disp}"},
+            }
         else:
-            ctx.warnings.append(f"Output '{disp}' ({typ}) is skipped — only IMAGE and "
-                                "VIDEO outputs are transferred back")
+            ctx.warnings.append(f"Output '{disp}' ({typ}) is skipped — only IMAGE, MASK "
+                                "and VIDEO outputs are transferred back")
             continue
         outputs.append(BoundOutput(name=disp, type=typ, save_node_key=save_key))
     if not outputs and not ctx.missing:
-        raise BlueprintFormatError("Blueprint has no usable IMAGE or VIDEO output")
+        raise BlueprintFormatError("Blueprint has no usable IMAGE, MASK or VIDEO output")
 
     # tensor slots whose targets are ALL optional in the cloud schema may stay
     # unconnected — the executor drops the sentinel and the cloud node falls

@@ -71,6 +71,21 @@ def png_bytes_to_tensor(data: bytes):
     return torch.from_numpy(arr)[None,]
 
 
+def png_bytes_to_mask(data: bytes):
+    """PNG/JPEG/WebP bytes → ComfyUI MASK tensor [1,H,W] float 0..1.
+
+    Inverse of mask_to_png_bytes — the cloud saves the mask as a grayscale
+    image (via MaskToImage + SaveImage), here it becomes a mask tensor again.
+    """
+    import numpy as np
+    import torch
+    from PIL import Image as PILImage
+
+    img = PILImage.open(_io.BytesIO(data)).convert("L")
+    arr = np.asarray(img).astype("float32") / 255.0
+    return torch.from_numpy(arr)[None,]
+
+
 def _batch(tensors: list):
     import torch
 
@@ -368,13 +383,14 @@ async def _collect_outputs(client, converted: ConvertedWorkflow, detail: dict) -
                 type=im.get("type", "output"))
             result.append(_bytes_to_video(data))
         else:
+            to_tensor = png_bytes_to_mask if bo.type == "MASK" else png_bytes_to_tensor
             tensors = []
             for im in files:
                 data = await client.download_output(
                     filename=im.get("filename", ""),
                     subfolder=im.get("subfolder", ""),
                     type=im.get("type", "output"))
-                tensors.append(png_bytes_to_tensor(data))
+                tensors.append(to_tensor(data))
             result.append(_batch(tensors))
     return tuple(result)
 
