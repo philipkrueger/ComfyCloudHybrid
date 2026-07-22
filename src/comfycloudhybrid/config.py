@@ -19,6 +19,9 @@ PACK_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = PACK_ROOT / "config.json"
 CACHE_DIR = PACK_ROOT / "cache"
 CURATED_DIR = PACK_ROOT / "blueprints_curated"
+# user-saved blueprints (right-click subgraph → "Save as Cloud Node"); per
+# install, gitignored, highest scan precedence so a saved copy overrides curated
+SAVED_DIR = PACK_ROOT / "saved_blueprints"
 
 ENV_KEY = "COMFY_CLOUD_API_KEY"
 
@@ -33,6 +36,7 @@ DEFAULTS = {
     # cloud round-trip only adds latency and GPU cost, so skip them by default
     "skip_local_capable": True,
     "sources": {
+        "saved": True,
         "user": True,
         "custom_nodes": True,
         "comfyui_blueprints": True,

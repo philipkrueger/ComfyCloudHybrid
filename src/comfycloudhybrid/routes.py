@@ -6,6 +6,7 @@ PromptServer binds its route table when the app starts.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from . import cache, config, rescan as rescan_mod
@@ -88,6 +89,52 @@ def register() -> None:
         # "no blueprint nodes registered", so every found slug counts as new
         result = await rescan_mod.rescan(known_slugs=KNOWN_SLUGS)
         return web.json_response(result)
+
+    @routes.post("/cloudhybrid/convert")
+    async def convert_subgraph(request):
+        """Validate a canvas subgraph and (mode=save) persist it as a cloud
+        node. Body: {blueprint: <blueprint-json>, mode: "test"|"save",
+        name?: str}. Always returns a preflight report; never generates a
+        dysfunctional node (report.ok == False when blocked)."""
+        from . import ondemand
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False,
+                                      "errors": ["Request body is not valid JSON."]},
+                                     status=400)
+        blueprint = data.get("blueprint")
+        mode = data.get("mode", "test")
+        if not isinstance(blueprint, dict):
+            return web.json_response({"ok": False,
+                                      "errors": ["Missing 'blueprint' object."]},
+                                     status=400)
+
+        # a reliable availability check needs the cloud catalog — fetch it once
+        # if we have a key but nothing cached yet
+        if cache.load_object_info() is None:
+            await rescan_mod.refresh_object_info()
+        schemas = rescan_mod.build_schema_source()
+
+        report = await asyncio.to_thread(ondemand.preflight, blueprint, schemas)
+
+        if mode == "save":
+            if not report.get("ok"):
+                report["saved"] = False  # refuse to persist a broken subgraph
+            else:
+                try:
+                    info = ondemand.save_blueprint(blueprint, report.get("name") or
+                                                   data.get("name") or "blueprint")
+                    rescan_result = await rescan_mod.rescan(known_slugs=KNOWN_SLUGS)
+                    report["saved"] = True
+                    report["saved_file"] = info["filename"]
+                    report["restart_required"] = rescan_result.get("restart_required", True)
+                except Exception as e:
+                    log.warning("saving blueprint failed: %s", e)
+                    report["saved"] = False
+                    report.setdefault("errors", []).append(f"Could not save: {e}")
+                    report["ok"] = False
+        return web.json_response(report)
 
     @routes.get("/cloudhybrid/blueprints")
     async def list_blueprints(request):

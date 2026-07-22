@@ -1,6 +1,8 @@
 # Secrets & runtime state — never commit
 config.json
 cache/
+# user-saved "convert to cloud node" blueprints (per install)
+saved_blueprints/
 
 # Python
 __pycache__/

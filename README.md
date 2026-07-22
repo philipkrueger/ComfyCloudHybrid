@@ -74,6 +74,27 @@ hot without a restart).
   (File → Export (API)) plus up to 4 image inputs via the placeholders
   `%CCH_IMAGE_1%`…`%CCH_IMAGE_4%`.
 
+## Convert a subgraph to a cloud node
+
+Right-click any **subgraph** on the canvas → two entries:
+
+- **☁ Convert to Cloud API Node (test)** — validates the subgraph and, if it
+  can run on the cloud, drops a pre-filled *☁ Run Cloud Workflow* node next to
+  it (image inputs mapped to `%CCH_IMAGE_N%`, promoted widgets baked to their
+  defaults). No restart — good for quickly testing a segment you carved out of
+  a template into a subgraph.
+- **☁ Save as Cloud Node (permanent)** — persists the subgraph under
+  `saved_blueprints/` and, after a ComfyUI restart, registers it as a proper
+  named cloud node with all its inputs (the full-fidelity path; the instant
+  node only carries up to four image inputs).
+
+Both run a **preflight**: a subgraph that would produce a dysfunctional node is
+never generated. Instead you get a report separating **errors** (blockers, e.g.
+a node class that does not exist on Comfy Cloud, or an unsupported boundary
+type) from **hints** (e.g. a model-free subgraph, or a model selector that fell
+back to free text). The same model-path/availability limits as the blueprint
+nodes apply — models referenced inside the subgraph must exist on Comfy Cloud.
+
 ## Limits & behavior
 
 - Inputs: IMAGE/MASK and value types (STRING/INT/FLOAT/BOOLEAN/COMBO).

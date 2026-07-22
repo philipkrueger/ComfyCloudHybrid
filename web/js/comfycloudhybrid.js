@@ -49,6 +49,187 @@ function openApiKeyPage() {
     window.open(API_KEY_URL, "_blank", "noopener");
 }
 
+// ---------------------------------------------------------------------------
+// Right-click "Convert to Cloud API Node"
+//
+// NOTE: the subgraph-serialisation and node-creation calls below use the live
+// ComfyUI / LiteGraph frontend API, which cannot be exercised in the offline
+// test suite. The backend (/cloudhybrid/convert) is fully tested; this glue is
+// defensive and may need small tweaks against a specific ComfyUI version.
+// ---------------------------------------------------------------------------
+
+const GENERIC_NODE_TYPE = "CloudHybrid_RunWorkflow";
+
+function isSubgraphNode(node) {
+    if (!node) return false;
+    return Boolean(
+        node.subgraph ||
+        node.isSubgraphNode?.() ||
+        node.constructor?.comfyClass === "SubgraphNode" ||
+        node.constructor?.name === "SubgraphNode");
+}
+
+// Wrap a canvas subgraph instance into the blueprint shape the backend
+// converter expects: { nodes:[instance], definitions:{subgraphs:[def]} }.
+function subgraphToBlueprint(node) {
+    const sub = node.subgraph;
+    if (!sub) throw new Error("This node is not a subgraph.");
+    const def = typeof sub.serialize === "function" ? sub.serialize() : { ...sub };
+    const defId = node.type || def.id || sub.id;
+    def.id = defId;
+    if (!def.name) def.name = node.title || sub.name || "Subgraph";
+    const instance = typeof node.serialize === "function"
+        ? node.serialize() : { id: node.id, type: defId };
+    instance.type = defId;
+    return {
+        version: 0.4,
+        nodes: [instance],
+        links: [],
+        definitions: { subgraphs: [def] },
+        extra: {},
+    };
+}
+
+// Modal listing errors (blocking) and warnings (hints) — the "Fehler-Report".
+function showReportDialog(title, report) {
+    const overlay = document.createElement("div");
+    overlay.style.cssText =
+        "position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:3000;" +
+        "display:flex;align-items:center;justify-content:center;";
+    const box = document.createElement("div");
+    box.style.cssText =
+        "max-width:min(560px,90vw);max-height:80vh;overflow:auto;padding:1.2rem 1.4rem;" +
+        "border-radius:10px;background:var(--comfy-menu-bg,#20202a);color:#eee;" +
+        "box-shadow:0 8px 40px rgba(0,0,0,.6);font-size:.85rem;line-height:1.5;";
+    const h = document.createElement("h3");
+    h.textContent = title;
+    h.style.cssText = "margin:0 0 .6rem;font-size:1rem;";
+    box.appendChild(h);
+
+    const section = (label, items, color) => {
+        if (!items || !items.length) return;
+        const t = document.createElement("div");
+        t.textContent = label;
+        t.style.cssText = `margin:.6rem 0 .25rem;font-weight:600;color:${color};`;
+        const ul = document.createElement("ul");
+        ul.style.cssText = "margin:0;padding-left:1.1rem;";
+        for (const it of items) {
+            const li = document.createElement("li");
+            li.textContent = it;
+            li.style.marginBottom = ".2rem";
+            ul.appendChild(li);
+        }
+        box.append(t, ul);
+    };
+    section("Errors — node not generated", report.errors, "#f77");
+    section("Hints", report.warnings, "#f5b942");
+    if (report.baked_inputs?.length) {
+        section("Baked to defaults (not editable on the instant node)",
+            report.baked_inputs.map((b) => `${b.name} = ${JSON.stringify(b.value)}`),
+            "#8bd");
+    }
+
+    const close = document.createElement("button");
+    close.textContent = "Close";
+    close.style.cssText =
+        "margin-top:1rem;padding:.4rem .9rem;border-radius:6px;border:none;cursor:pointer;" +
+        "background:var(--p-primary-color,#4f9cf9);color:#fff;font-size:.85rem;";
+    close.onclick = () => overlay.remove();
+    box.appendChild(close);
+    overlay.appendChild(box);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+}
+
+// Drop a pre-filled generic runner next to the source subgraph.
+function spawnGenericNode(sourceNode, report) {
+    const node = LiteGraph.createNode(GENERIC_NODE_TYPE);
+    if (!node) {
+        toast("error", "Comfy Cloud",
+            "Generic runner node not found — restart ComfyUI so the pack loads.");
+        return;
+    }
+    app.graph.add(node);
+    if (sourceNode?.pos) node.pos = [sourceNode.pos[0], sourceNode.pos[1] + 160];
+    const w = node.widgets?.find((x) => x.name === "workflow_json");
+    if (w) w.value = report.generic_json;
+    node.title = `☁ ${report.name || "Cloud"} (test)`;
+    app.graph.setDirtyCanvas(true, true);
+    const imgs = (report.image_inputs || []).map((i) => `${i.token} ← ${i.name}`).join(", ");
+    toast("success", "Comfy Cloud",
+        `Instant node created for “${report.name}”.` +
+        (imgs ? ` Connect image inputs: ${imgs}.` : ""));
+    if ((report.warnings || []).length) showReportDialog("Conversion hints", report);
+}
+
+async function convertSubgraph(node, mode) {
+    let blueprint;
+    try {
+        blueprint = subgraphToBlueprint(node);
+    } catch (e) {
+        toast("error", "Comfy Cloud", `Cannot read this subgraph: ${e.message || e}`);
+        return;
+    }
+    toast("info", "Comfy Cloud", mode === "save"
+        ? "Validating and saving subgraph …" : "Validating subgraph …");
+    let report;
+    try {
+        report = await postJson("/cloudhybrid/convert", { blueprint, mode });
+    } catch (e) {
+        toast("error", "Comfy Cloud", `Conversion request failed: ${e}`);
+        return;
+    }
+
+    if (!report.ok) {
+        toast("error", "Comfy Cloud",
+            `Cannot convert “${report.name || "subgraph"}” — ${(report.errors || []).length} error(s).`);
+        showReportDialog("Cannot convert this subgraph", report);
+        return;
+    }
+
+    if (mode === "save") {
+        if (report.saved) {
+            toast("warn", "Comfy Cloud",
+                `Saved as “${report.name}”. Restart ComfyUI to get the node` +
+                (report.restart_required === false ? "." : " (new node classes need a restart)."));
+        } else {
+            toast("error", "Comfy Cloud", "Saving failed — see report.");
+            showReportDialog("Save failed", report);
+        }
+        if ((report.warnings || []).length) showReportDialog("Saved — please note", report);
+        return;
+    }
+
+    // mode === "test"
+    if (report.instant_testable) {
+        spawnGenericNode(node, report);
+    } else {
+        toast("warn", "Comfy Cloud",
+            `“${report.name}” can't run on the instant node (${report.generic_reason}). ` +
+            "Use “Save as Cloud Node” for a full node with all inputs.");
+        showReportDialog("Not instant-testable — use Save as Cloud Node", report);
+    }
+}
+
+// Add the two entries to any subgraph node's right-click menu.
+function installSubgraphMenu() {
+    if (typeof LGraphCanvas === "undefined" || !LGraphCanvas.prototype) return;
+    const orig = LGraphCanvas.prototype.getNodeMenuOptions;
+    LGraphCanvas.prototype.getNodeMenuOptions = function (node) {
+        const options = orig ? orig.apply(this, arguments) : [];
+        if (isSubgraphNode(node)) {
+            options.push(null, {
+                content: "☁ Convert to Cloud API Node (test)",
+                callback: () => convertSubgraph(node, "test"),
+            }, {
+                content: "☁ Save as Cloud Node (permanent)",
+                callback: () => convertSubgraph(node, "save"),
+            });
+        }
+        return options;
+    };
+}
+
 app.registerExtension({
     name: "ComfyCloudHybrid",
     settings: [
@@ -218,6 +399,8 @@ app.registerExtension({
         },
     ],
     async setup() {
+        try { installSubgraphMenu(); }
+        catch (e) { console.warn("[ComfyCloudHybrid] subgraph menu not installed:", e); }
         // surface server-side key state once at startup
         try {
             const resp = await api.fetchApi("/cloudhybrid/status");

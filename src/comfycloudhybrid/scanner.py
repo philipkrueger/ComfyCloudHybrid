@@ -96,6 +96,14 @@ def scan() -> list[BlueprintSource]:
     found: list[BlueprintSource] = []
     user_dirs, custom_dirs, shipped = _comfy_paths()
 
+    # saved-as-cloud-node blueprints win over every other source, so a locally
+    # tweaked subgraph shadows the curated original with the same definition
+    if sources_cfg.get("saved", True) and config.SAVED_DIR.is_dir():
+        for p in sorted(glob.glob(str(config.SAVED_DIR / "*.json"))):
+            bp = _probe(p, "saved")
+            if bp:
+                found.append(bp)
+
     if sources_cfg.get("user", True):
         for d in user_dirs:
             for p in sorted(glob.glob(os.path.join(d, "*.json"))):

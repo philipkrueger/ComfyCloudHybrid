@@ -9,14 +9,15 @@ ausgeführt — Inputs hochladen, Job pollen, Bilder zurückladen.
 | Modul (src/comfycloudhybrid/) | Verantwortung |
 |---|---|
 | `extension.py` | V3-Entrypoint: Scan → Convert → Nodes registrieren; Routen-Import |
-| `scanner.py` | Blueprint-Discovery (user/custom_nodes/shipped/curated), Dedupe per Def-UUID |
+| `scanner.py` | Blueprint-Discovery (saved/user/custom_nodes/shipped/curated), Dedupe per Def-UUID; `saved` = höchste Präzedenz |
 | `converter/flatten.py` | Subgraph-Flattening → flaches API-Format (Kern-Algorithmus) |
 | `converter/widgets.py` | positionale `widgets_values` → benannte Inputs (seed-/upload-Slots!) |
 | `converter/schema_source.py` | Node-Schemas: Cloud-`object_info`-Cache, lokaler Fallback |
 | `node_factory.py` | dynamische `io.ComfyNode`-Klassen pro Blueprint |
+| `ondemand.py` | Rechtsklick-Subgraph→Cloud-Node: `preflight` (Report: errors/warnings), `to_generic`-Prompt (Instant-Test via generische Node), `save_blueprint` (→ `saved_blueprints/`) |
 | `executor.py` | Laufzeit: inject → upload → submit → poll → download |
 | `cloud_client.py` | aiohttp-Client für die Cloud-API (X-API-Key) |
-| `routes.py` | `/cloudhybrid/*` (api_key, status, test, rescan, config, blueprints) |
+| `routes.py` | `/cloudhybrid/*` (api_key, status, test, rescan, config, blueprints, convert) |
 | `cache.py` | `cache/converted/`, `cloud_object_info.json` (24h), `uploads.json` |
 | `config.py` | API-Key (env → config.json 0600) + Tunables |
 
