@@ -82,6 +82,61 @@ class TestPreflightBlocks(unittest.TestCase):
         self.assertTrue(any("cloud catalog" in w for w in r["warnings"]))
 
 
+def _arrayify_links(sg):
+    """Simulate LiteGraph's live serialize(): links as positional arrays."""
+    sg["links"] = [[l["id"], l["origin_id"], l["origin_slot"],
+                    l["target_id"], l["target_slot"], l["type"]]
+                   for l in sg["links"]]
+
+
+class TestLiveSerializationFormat(unittest.TestCase):
+    """The canvas right-click sends LiteGraph's live serialisation, where
+    links are positional arrays — not the dict form of blueprint files."""
+
+    def test_array_form_links_convert_fine(self):
+        bp = load("mask_blueprint.json")
+        _arrayify_links(bp["definitions"]["subgraphs"][0])
+        r = ondemand.preflight(bp, schemas())
+        self.assertTrue(r["ok"], r["errors"])
+        self.assertTrue(r["instant_testable"])
+        self.assertEqual([o["type"] for o in r["outputs"]], ["MASK"])
+
+    def test_save_normalizes_to_dict_links(self):
+        # a saved file must be scanner/convert-compatible on the next startup,
+        # so array links are persisted in dict form
+        bp = load("mask_blueprint.json")
+        _arrayify_links(bp["definitions"]["subgraphs"][0])
+        with tempfile.TemporaryDirectory() as tmp:
+            orig = config.SAVED_DIR
+            config.SAVED_DIR = Path(tmp)
+            try:
+                info = ondemand.save_blueprint(bp, "arr")
+                saved = json.loads(Path(info["path"]).read_text())
+                for l in saved["definitions"]["subgraphs"][0]["links"]:
+                    self.assertIsInstance(l, dict)
+                    self.assertIn("origin_id", l)
+            finally:
+                config.SAVED_DIR = orig
+
+    def test_crash_dump_written_on_unexpected_failure(self):
+        # generic converter crashes must produce the debug dump for bug reports
+        bp = {"definitions": {"subgraphs": [{"id": "x", "nodes": []}]},
+              "nodes": "boom"}  # str instead of list → unexpected TypeError
+        with tempfile.TemporaryDirectory() as tmp:
+            orig_cache, orig_dump = config.CACHE_DIR, ondemand.DEBUG_DUMP
+            config.CACHE_DIR = Path(tmp)
+            ondemand.DEBUG_DUMP = Path(tmp) / "convert_debug.json"
+            try:
+                r = ondemand.preflight(bp, schemas())
+                self.assertFalse(r["ok"])
+                self.assertTrue(any("convert_debug.json" in e for e in r["errors"]))
+                dump = json.loads(ondemand.DEBUG_DUMP.read_text())
+                self.assertIn("Traceback", dump["error"])
+                self.assertEqual(dump["blueprint"]["nodes"], "boom")
+            finally:
+                config.CACHE_DIR, ondemand.DEBUG_DUMP = orig_cache, orig_dump
+
+
 class TestSaveBlueprint(unittest.TestCase):
     def test_save_writes_a_probeable_blueprint(self):
         from comfycloudhybrid.scanner import _probe

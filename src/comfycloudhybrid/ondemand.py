@@ -21,6 +21,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import traceback
 
 from . import config
 from .converter import convert
@@ -33,6 +34,52 @@ log = logging.getLogger("ComfyCloudHybrid")
 # the generic runner exposes exactly four image inputs (see nodes_generic.py)
 GENERIC_TOKENS = ["%CCH_IMAGE_1%", "%CCH_IMAGE_2%", "%CCH_IMAGE_3%", "%CCH_IMAGE_4%"]
 MAX_GENERIC_IMAGES = len(GENERIC_TOKENS)
+
+# on an unexpected conversion crash the exact payload is preserved here so a
+# bug report carries the real live-frontend structure, not a guess
+DEBUG_DUMP = config.CACHE_DIR / "convert_debug.json"
+
+_LINK_KEYS = ("id", "origin_id", "origin_slot", "target_id", "target_slot", "type")
+
+
+def _normalize_blueprint(bp: dict) -> dict:
+    """Accept the live frontend's serialisation, not only blueprint files.
+
+    LiteGraph's Graph.serialize() emits links as positional arrays
+    [id, origin_id, origin_slot, target_id, target_slot, type]; blueprint
+    files (and the converter) use dicts with those keys. Normalise every
+    links list — root and all subgraph definitions, recursively (nested
+    subgraphs carry their own definitions block)."""
+    def fix_links(container: dict) -> None:
+        links = container.get("links")
+        if isinstance(links, list):
+            container["links"] = [
+                dict(zip(_LINK_KEYS, l)) if isinstance(l, (list, tuple)) and len(l) >= 6
+                else l
+                for l in links]
+
+    def walk(container: dict) -> None:
+        fix_links(container)
+        for sg in (container.get("definitions") or {}).get("subgraphs") or []:
+            if isinstance(sg, dict):
+                walk(sg)
+
+    bp = copy.deepcopy(bp)
+    walk(bp)
+    return bp
+
+
+def _dump_debug(blueprint: dict, err_text: str) -> str | None:
+    """Write the failing payload + traceback next to the other caches so it
+    can be attached to a bug report. Fail-soft: never raises."""
+    try:
+        config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        with open(DEBUG_DUMP, "w", encoding="utf-8") as f:
+            json.dump({"error": err_text, "blueprint": blueprint}, f, indent=2)
+        return str(DEBUG_DUMP)
+    except Exception as e:
+        log.warning("could not write convert debug dump: %s", e)
+        return None
 
 
 def preflight(blueprint: dict, schemas: SchemaSource) -> dict:
@@ -59,7 +106,7 @@ def preflight(blueprint: dict, schemas: SchemaSource) -> dict:
 
     # 1) run the converter, turning its exceptions into structured errors
     try:
-        cw = convert(blueprint, schemas)
+        cw = convert(_normalize_blueprint(blueprint), schemas)
     except BlueprintFormatError as e:
         report["errors"].append(f"Not a single-subgraph blueprint: {e}")
         return report
@@ -67,8 +114,14 @@ def preflight(blueprint: dict, schemas: SchemaSource) -> dict:
         report["errors"].append(str(e))
         return report
     except Exception as e:  # defensive: a converter bug must not 500 the route
-        log.warning("preflight conversion failed: %s", e)
-        report["errors"].append(f"Conversion failed: {e}")
+        tb = traceback.format_exc()
+        log.warning("preflight conversion failed:\n%s", tb)
+        path = _dump_debug(blueprint, tb)
+        msg = f"Conversion failed: {e}"
+        if path:
+            msg += (f" — the payload was saved to {path}; attach that file "
+                    "to a bug report.")
+        report["errors"].append(msg)
         return report
 
     report["name"] = cw.name
@@ -185,6 +238,9 @@ def save_blueprint(blueprint: dict, name: str) -> dict:
     if not isinstance(blueprint, dict) or not blueprint.get("nodes"):
         raise ValueError("blueprint payload is empty or malformed")
 
+    # persist in blueprint-file form (dict links) so the startup scanner's
+    # convert() accepts the file regardless of the live serialisation format
+    blueprint = _normalize_blueprint(blueprint)
     config.SAVED_DIR.mkdir(parents=True, exist_ok=True)
     fname = f"{_slugify(name or 'blueprint')}.json"
     path = config.SAVED_DIR / fname
