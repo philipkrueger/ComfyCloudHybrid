@@ -104,13 +104,13 @@ def preflight(blueprint: dict, schemas: SchemaSource) -> dict:
         "instant_testable": False, "image_inputs": [], "baked_inputs": [],
     }
 
-    # 1) run the converter, turning its exceptions into structured errors
+    # 1) run the converter, turning its exceptions into structured errors.
+    # every conversion-level failure dumps the exact payload — live-frontend
+    # serialisation quirks can only be diagnosed from the real structure
     try:
         cw = convert(_normalize_blueprint(blueprint), schemas)
-    except BlueprintFormatError as e:
-        report["errors"].append(f"Not a single-subgraph blueprint: {e}")
-        return report
-    except UnsupportedTypeError as e:
+    except (BlueprintFormatError, UnsupportedTypeError) as e:
+        _dump_debug(blueprint, str(e))
         report["errors"].append(str(e))
         return report
     except Exception as e:  # defensive: a converter bug must not 500 the route

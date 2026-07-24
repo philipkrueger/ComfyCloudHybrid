@@ -205,7 +205,13 @@ def convert(blueprint: dict, schemas: SchemaSource, fallback_name: str = "") -> 
             continue
         outputs.append(BoundOutput(name=disp, type=typ, save_node_key=save_key))
     if not outputs and not ctx.missing:
-        raise BlueprintFormatError("Blueprint has no usable IMAGE, MASK or VIDEO output")
+        # surface WHY each output was skipped — without this the caller only
+        # sees "no usable output" while the actual reason (unconnected slot,
+        # unsupported type, stripped node) sits in the discarded warnings
+        detail = "; ".join(ctx.warnings[-3:])
+        raise BlueprintFormatError(
+            "Blueprint has no usable IMAGE, MASK or VIDEO output"
+            + (f" ({detail})" if detail else ""))
 
     # tensor slots whose targets are ALL optional in the cloud schema may stay
     # unconnected — the executor drops the sentinel and the cloud node falls

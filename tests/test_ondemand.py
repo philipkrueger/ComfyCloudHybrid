@@ -118,6 +118,16 @@ class TestLiveSerializationFormat(unittest.TestCase):
             finally:
                 config.SAVED_DIR = orig
 
+    def test_no_output_error_names_the_skip_reason(self):
+        # disconnect the MASK boundary: the error must say WHY (unconnected),
+        # not just "no usable output"
+        bp = load("mask_blueprint.json")
+        sg = bp["definitions"]["subgraphs"][0]
+        sg["links"] = [l for l in sg["links"] if l["target_id"] != -20]
+        r = ondemand.preflight(bp, schemas())
+        self.assertFalse(r["ok"])
+        self.assertTrue(any("not connected" in e for e in r["errors"]), r["errors"])
+
     def test_crash_dump_written_on_unexpected_failure(self):
         # generic converter crashes must produce the debug dump for bug reports
         bp = {"definitions": {"subgraphs": [{"id": "x", "nodes": []}]},
