@@ -16,7 +16,7 @@ import logging
 
 from . import cache, config
 from .cloud_client import CloudError, ComfyCloudClient
-from .converter.model import SENTINEL, ConvertedWorkflow
+from .converter.model import SENTINEL, VALUE_OUTPUT_TYPES, ConvertedWorkflow
 
 log = logging.getLogger("ComfyCloudHybrid")
 
@@ -366,11 +366,40 @@ def _output_files(node_out: dict) -> list:
     return files
 
 
+def _parse_value_output(typ: str, text: str):
+    """Inverse of the cloud-side PreviewAny text channel (see flatten.py):
+    strings verbatim, numbers via int()/float(), booleans tolerantly,
+    BOUNDING_BOX via json (PreviewAny json.dumps's structured data)."""
+    try:
+        if typ == "INT":
+            return int(float(text.strip()))
+        if typ == "FLOAT":
+            return float(text.strip())
+        if typ == "BOOLEAN":
+            return text.strip().lower() in ("true", "1", "yes")
+        if typ == "BOUNDING_BOX":
+            return json.loads(text)
+    except (ValueError, json.JSONDecodeError) as e:
+        raise CloudError(
+            f"Cloud output could not be parsed as {typ}: {text[:120]!r} ({e})")
+    return text
+
+
 async def _collect_outputs(client, converted: ConvertedWorkflow, detail: dict) -> tuple:
     outputs = detail.get("outputs") or {}
     result = []
     for bo in converted.outputs:
         node_out = outputs.get(bo.save_node_key) or {}
+        if bo.type in VALUE_OUTPUT_TYPES:
+            texts = node_out.get("text")
+            if not texts:
+                raise CloudError(
+                    f"Cloud job finished but text output '{bo.name}' "
+                    f"({bo.save_node_key}) is missing.",
+                    detail=json.dumps(list(outputs.keys()))[:300])
+            result.append(_parse_value_output(
+                bo.type, "".join(str(t) for t in texts)))
+            continue
         files = _output_files(node_out)
         if not files:
             raise CloudError(

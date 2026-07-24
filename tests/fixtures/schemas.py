@@ -3,6 +3,12 @@
 CLOUD_OBJECT_INFO = {
     "PrimitiveStringMultiline": {
         "input": {"required": {"value": ["STRING", {"multiline": True}]}},
+        "output": ["STRING"],
+    },
+    "PreviewAny": {
+        "input": {"required": {"source": ["*", {}]}},
+        "output": ["STRING"],
+        "output_node": True,
     },
     "GeminiImageNode": {
         "api_node": True,

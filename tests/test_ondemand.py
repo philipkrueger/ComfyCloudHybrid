@@ -8,7 +8,7 @@ import _path  # noqa: F401
 from schemas import CLOUD_OBJECT_INFO
 
 from comfycloudhybrid import config, ondemand
-from comfycloudhybrid.converter import SchemaSource
+from comfycloudhybrid.converter import SchemaSource, convert
 from comfycloudhybrid.converter.model import SENTINEL
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -219,6 +219,54 @@ class TestUnsupportedInputPolicy(unittest.TestCase):
         self.assertFalse(r["ok"])
         self.assertTrue(any("required input depends" in e for e in r["errors"]),
                         r["errors"])
+
+
+def _string_blueprint():
+    """Minimal subgraph whose only output is a STRING (caption-style)."""
+    uid = "dddddddd-0000-0000-0000-000000000001"
+    return {
+        "version": 0.4, "links": [], "extra": {},
+        "nodes": [{"id": 50, "type": uid, "inputs": [],
+                   "outputs": [{"name": "RESPONSE", "type": "STRING", "links": []}],
+                   "properties": {}, "widgets_values": []}],
+        "definitions": {"subgraphs": [{
+            "id": uid, "name": "Tiny Text", "version": 1,
+            "inputNode": {"id": -10}, "outputNode": {"id": -20},
+            "inputs": [], "widgets": [], "groups": [], "extra": {},
+            "outputs": [{"id": "to1", "name": "RESPONSE", "type": "STRING",
+                         "linkIds": [3]}],
+            "nodes": [{"id": 10, "type": "PrimitiveStringMultiline",
+                       "inputs": [{"name": "value", "type": "STRING",
+                                   "widget": {"name": "value"}, "link": None}],
+                       "outputs": [{"name": "STRING", "type": "STRING",
+                                    "links": [3]}],
+                       "properties": {}, "widgets_values": ["hello"]}],
+            "links": [{"id": 3, "origin_id": 10, "origin_slot": 0,
+                       "target_id": -20, "target_slot": 0, "type": "STRING"}],
+        }]},
+    }
+
+
+class TestValueOutputs(unittest.TestCase):
+    """STRING/INT/FLOAT/BOOLEAN/BOUNDING_BOX outputs travel back through the
+    PreviewAny text channel instead of a saved file."""
+
+    def test_string_output_is_transferable(self):
+        r = ondemand.preflight(_string_blueprint(), schemas())
+        self.assertTrue(r["ok"], r["errors"])
+        self.assertEqual(r["outputs"], [{"name": "RESPONSE", "type": "STRING"}])
+
+    def test_string_output_uses_previewany(self):
+        cw = convert(_string_blueprint(), schemas())
+        save = cw.prompt[cw.outputs[0].save_node_key]
+        self.assertEqual(save["class_type"], "PreviewAny")
+        self.assertEqual(save["inputs"]["source"], ["50:10", 0])
+
+    def test_value_only_subgraph_not_instant_testable(self):
+        # the generic runner returns images — value outputs need the full node
+        r = ondemand.preflight(_string_blueprint(), schemas())
+        self.assertFalse(r["instant_testable"])
+        self.assertIn("image/video output", r["generic_reason"])
 
 
 class TestSaveBlueprint(unittest.TestCase):

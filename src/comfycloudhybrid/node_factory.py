@@ -83,13 +83,21 @@ def _build_input(bi: BoundInput):
     return io.String.Input(bi.safe_id, default=default, multiline=multiline, **common)
 
 
+_OUTPUT_IO = {
+    "VIDEO": io.Video.Output,
+    "MASK": io.Mask.Output,
+    "STRING": io.String.Output,
+    "INT": io.Int.Output,
+    "FLOAT": io.Float.Output,
+    "BOOLEAN": io.Boolean.Output,
+    "BOUNDING_BOX": io.BoundingBox.Output,
+}
+
+
 def _build_output(index: int, bo):
     oid = f"out_{index}_{bo.name}"
-    if bo.type == "VIDEO":
-        return io.Video.Output(id=oid, display_name=bo.name)
-    if bo.type == "MASK":
-        return io.Mask.Output(id=oid, display_name=bo.name)
-    return io.Image.Output(id=oid, display_name=bo.name)
+    out_cls = _OUTPUT_IO.get(bo.type, io.Image.Output)
+    return out_cls(id=oid, display_name=bo.name)
 
 
 def _availability_suffix(cw: ConvertedWorkflow) -> str:

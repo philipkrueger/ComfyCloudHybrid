@@ -264,6 +264,12 @@ def _to_generic(cw: ConvertedWorkflow) -> dict:
             reasons.append(f"input '{bi.name}' ({bi.type}) — the instant node "
                            "only accepts up to four image inputs")
 
+    # the generic runner returns image batches only — a subgraph whose outputs
+    # are all value-typed (STRING caption, INT, …) needs the full node
+    if not any(o.type in ("IMAGE", "MASK", "VIDEO") for o in cw.outputs):
+        reasons.append("no image/video output — the instant node only returns "
+                       "images (use Save as Cloud Node for value outputs)")
+
     leftover = _remaining_sentinel_ids(prompt)
     if leftover:
         reasons.append("unfilled inputs remain: " + ", ".join(sorted(leftover)))

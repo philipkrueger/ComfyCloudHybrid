@@ -14,6 +14,7 @@ import re
 from .model import (
     SENTINEL,
     TENSOR_TYPES,
+    VALUE_OUTPUT_TYPES,
     VALUE_TYPES,
     BlueprintFormatError,
     BoundInput,
@@ -47,7 +48,8 @@ _MODEL_CLASS_RE = re.compile(
     re.IGNORECASE)
 _IMPLICIT_MODEL_RE = re.compile(
     r"DepthAnything|BiRefNet|SAM\d|SDPose|MoGe|Mediapipe|RMBG|Interpolat|GIMM"
-    r"|GAN|Lotus|Hunyuan|Tripo|VOID|TextGenerate|RemoveBackground|Gemini|LLM",
+    r"|GAN|Lotus|Hunyuan|Tripo|VOID|TextGenerate|RemoveBackground|Gemini|LLM"
+    r"|QwenVL",
     re.IGNORECASE)
 
 
@@ -55,7 +57,7 @@ def _is_local_capable(prompt: dict, schemas: SchemaSource) -> bool:
     """True when no emitted node needs AI weights or a partner API."""
     for entry in prompt.values():
         cls = entry.get("class_type", "")
-        if cls in ("SaveImage", "SaveVideo"):
+        if cls in ("SaveImage", "SaveVideo", "PreviewAny"):
             continue
         if (schemas.get_cloud(cls) or {}).get("api_node"):
             return False
@@ -222,9 +224,20 @@ def convert(blueprint: dict, schemas: SchemaSource, fallback_name: str = "") -> 
                 "inputs": {"images": [conv_key, 0], "filename_prefix": file_prefix},
                 "_meta": {"title": f"CloudHybrid Output {disp}"},
             }
+        elif typ in VALUE_OUTPUT_TYPES:
+            # text channel: PreviewAny puts str()/json.dumps() of any value
+            # into the job history ({"ui": {"text": [...]}}); the executor
+            # parses it back into the declared type — no file round-trip
+            ctx.prompt[save_key] = {
+                "class_type": "PreviewAny",
+                "inputs": {"source": res[1]},
+                "_meta": {"title": f"CloudHybrid Output {disp}"},
+            }
         else:
-            ctx.warnings.append(f"Output '{disp}' ({typ}) is skipped — only IMAGE, MASK "
-                                "and VIDEO outputs are transferred back")
+            ctx.warnings.append(
+                f"Output '{disp}' ({typ}) is skipped — transferable are IMAGE, "
+                "MASK, VIDEO, value types (STRING/INT/FLOAT/BOOLEAN) and "
+                "BOUNDING_BOX")
             continue
         outputs.append(BoundOutput(name=disp, type=typ, save_node_key=save_key))
     if not outputs and not ctx.missing:
@@ -233,8 +246,8 @@ def convert(blueprint: dict, schemas: SchemaSource, fallback_name: str = "") -> 
         # unsupported type, stripped node) sits in the discarded warnings
         detail = "; ".join(ctx.warnings[-3:])
         raise BlueprintFormatError(
-            "Blueprint has no usable IMAGE, MASK or VIDEO output"
-            + (f" ({detail})" if detail else ""))
+            "Blueprint has no transferable output (IMAGE, MASK, VIDEO, "
+            "value types or BOUNDING_BOX)" + (f" ({detail})" if detail else ""))
 
     # tensor slots whose targets are ALL optional in the cloud schema may stay
     # unconnected — the executor drops the sentinel and the cloud node falls

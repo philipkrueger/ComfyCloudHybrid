@@ -28,6 +28,12 @@ class UnsupportedTypeError(Exception):
 VALUE_TYPES = {"STRING", "INT", "FLOAT", "BOOLEAN", "COMBO"}
 TENSOR_TYPES = {"IMAGE", "MASK"}
 
+# output types transferred back through PreviewAny's text channel: the cloud
+# job's history carries {"text": [...]} per node — strings verbatim, numbers
+# via str(), structured JSON-safe data (BOUNDING_BOX dicts/lists) via
+# json.dumps. The executor parses them back (see executor._parse_value_output).
+VALUE_OUTPUT_TYPES = {"STRING", "INT", "FLOAT", "BOOLEAN", "BOUNDING_BOX"}
+
 
 @dataclass
 class BoundInput:

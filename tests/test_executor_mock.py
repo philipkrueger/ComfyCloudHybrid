@@ -385,5 +385,49 @@ class ExecutorTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("API key", ctx.exception.user_message)
 
 
+class ValueOutputParseTest(unittest.TestCase):
+    """PreviewAny text channel → typed Python values."""
+
+    def test_parse_types(self):
+        p = executor._parse_value_output
+        self.assertEqual(p("STRING", "a caption"), "a caption")
+        self.assertEqual(p("INT", "5"), 5)
+        self.assertEqual(p("FLOAT", "23.976"), 23.976)
+        self.assertTrue(p("BOOLEAN", "True"))
+        self.assertFalse(p("BOOLEAN", "False"))
+        self.assertEqual(
+            p("BOUNDING_BOX", '[{"x": 1, "y": 2, "width": 3, "height": 4}]'),
+            [{"x": 1, "y": 2, "width": 3, "height": 4}])
+
+    def test_parse_error_is_clear(self):
+        with self.assertRaises(CloudError):
+            executor._parse_value_output("INT", "not a number")
+        with self.assertRaises(CloudError):
+            executor._parse_value_output("BOUNDING_BOX", "<tensor blob>")
+
+
+class CollectTextOutputsTest(unittest.IsolatedAsyncioTestCase):
+    async def test_text_outputs_collected_without_downloads(self):
+        from comfycloudhybrid.converter.model import BoundOutput, ConvertedWorkflow
+        cw = ConvertedWorkflow(
+            name="t", prompt={}, inputs=[],
+            outputs=[BoundOutput("RESPONSE", "STRING", "cch_save_0"),
+                     BoundOutput("count", "INT", "cch_save_1")],
+            required_uploads=[])
+        detail = {"outputs": {"cch_save_0": {"text": ["a caption"]},
+                              "cch_save_1": {"text": ["3"]}}}
+        # client=None: the text channel must not attempt any download
+        result = await executor._collect_outputs(None, cw, detail)
+        self.assertEqual(result, ("a caption", 3))
+
+    async def test_missing_text_output_raises(self):
+        from comfycloudhybrid.converter.model import BoundOutput, ConvertedWorkflow
+        cw = ConvertedWorkflow(name="t", prompt={}, inputs=[],
+                               outputs=[BoundOutput("RESPONSE", "STRING", "cch_save_0")],
+                               required_uploads=[])
+        with self.assertRaises(CloudError):
+            await executor._collect_outputs(None, cw, {"outputs": {}})
+
+
 if __name__ == "__main__":
     unittest.main()
