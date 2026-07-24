@@ -138,10 +138,11 @@ def convert(blueprint: dict, schemas: SchemaSource, fallback_name: str = "") -> 
             # a free-text STRING below
             bi_type = next(p for p in parts if p in VALUE_TYPES)
         else:
-            raise UnsupportedTypeError(
-                f"Subgraph-Input '{disp}' hat Typ {typ} — nur IMAGE/MASK/STRING/INT/FLOAT/"
-                "BOOLEAN werden über die Cloud-Grenze unterstützt. Subgraph so umbauen, "
-                "dass Bilder die Grenze passieren (VAEDecode/Encode innerhalb des Subgraphs).")
+            # non-transferable type (BOUNDING_BOX, LATENT, …) — keep it for
+            # now; after binding we know its targets and either drop it (all
+            # targets optional in the cloud schema → cloud default applies)
+            # or reject the blueprint (a required input depends on it)
+            bi_type = parts[0]
         slot_inputs.append(BoundInput(
             name=disp, safe_id=sanitize_id(disp, ctx.taken_ids),
             type=bi_type, kind="slot", optional=label_optional))
@@ -153,6 +154,28 @@ def convert(blueprint: dict, schemas: SchemaSource, fallback_name: str = "") -> 
 
     prefix = f"{inst['id']}:"
     omap = _expand(root_def, prefix, resolve_root_boundary, ctx, defs, schemas)
+
+    # -- non-transferable boundary inputs ------------------------------------
+    # a slot whose type cannot cross the cloud boundary is fine as long as
+    # every input it feeds is optional in the cloud schema (SAM3's bboxes/
+    # coords hints, say): drop the slot, the cloud default applies. If a
+    # required input depends on it the node would be dysfunctional — reject.
+    for bi in list(slot_inputs):
+        if bi.type in TENSOR_TYPES or bi.type in VALUE_TYPES:
+            continue
+        if all(_target_is_optional(ctx.prompt, schemas, k, i) for k, i in bi.targets):
+            for k, i in bi.targets:
+                (ctx.prompt.get(k) or {}).get("inputs", {}).pop(i, None)
+            ctx.warnings.append(
+                f"Input '{bi.name}' ({bi.type}) cannot cross the cloud boundary "
+                "and stays unconnected — the cloud node's default is used")
+            slot_inputs.remove(bi)
+        else:
+            raise UnsupportedTypeError(
+                f"Subgraph input '{bi.name}' has type {bi.type} — only IMAGE/MASK/"
+                "STRING/INT/FLOAT/BOOLEAN cross the cloud boundary, and a required "
+                "input depends on it. Rework the subgraph so only images or values "
+                "pass the boundary (VAEDecode/Encode inside the subgraph).")
 
     # -- boundary outputs -> SaveImage nodes --------------------------------
     outputs: list[BoundOutput] = []

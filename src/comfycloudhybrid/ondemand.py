@@ -66,7 +66,54 @@ def _normalize_blueprint(bp: dict) -> dict:
 
     bp = copy.deepcopy(bp)
     walk(bp)
+    _reconstruct_boundaries(bp)
     return bp
+
+
+def _reconstruct_boundaries(bp: dict) -> None:
+    """Fill in def.inputs/def.outputs when the live serialisation omits them.
+
+    Blueprint files declare the subgraph boundary on the definition
+    (inputs/outputs arrays with name+type); the desktop frontend's live
+    serialize() leaves those null. The same information lives on the instance
+    node: its first N inputs mirror the boundary slots 0..N-1 (N = highest
+    -10 origin_slot in the def links + 1; the remaining instance inputs are
+    promoted proxy widgets, which must NOT become slots), and its outputs
+    mirror the boundary outputs 1:1."""
+    defs = {sg.get("id"): sg
+            for sg in (bp.get("definitions") or {}).get("subgraphs") or []
+            if isinstance(sg, dict)}
+
+    def instances(container: dict):
+        for n in container.get("nodes") or []:
+            if isinstance(n, dict) and n.get("type") in defs:
+                yield n
+
+    containers = [bp] + list(defs.values())
+    for container in containers:
+        for inst in instances(container):
+            sg = defs[inst["type"]]
+            links = [l for l in sg.get("links") or [] if isinstance(l, dict)]
+            if sg.get("inputs") is None:
+                n_slots = 1 + max((l.get("origin_slot", -1) for l in links
+                                   if l.get("origin_id") == -10), default=-1)
+                sg["inputs"] = [
+                    {"id": f"cch_in_{k}",
+                     "name": i.get("name") or f"input_{k}",
+                     **({"label": i["label"]} if i.get("label") else {}),
+                     "type": i.get("type") or "*"}
+                    for k, i in enumerate((inst.get("inputs") or [])[:n_slots])]
+            if sg.get("outputs") is None:
+                sg["outputs"] = [
+                    {"id": f"cch_out_{k}",
+                     "name": o.get("name") or f"output_{k}",
+                     **({"label": o["label"]} if o.get("label") else {}),
+                     "type": o.get("type") or "*"}
+                    for k, o in enumerate(inst.get("outputs") or [])]
+            if not sg.get("inputNode"):
+                sg["inputNode"] = {"id": -10}
+            if not sg.get("outputNode"):
+                sg["outputNode"] = {"id": -20}
 
 
 def _dump_debug(blueprint: dict, err_text: str) -> str | None:

@@ -147,6 +147,80 @@ class TestLiveSerializationFormat(unittest.TestCase):
                 config.CACHE_DIR, ondemand.DEBUG_DUMP = orig_cache, orig_dump
 
 
+def _live_ify(bp):
+    """Mimic Comfy Desktop's live serialize(): the def carries no boundary
+    declaration (inputs/outputs/inputNode/outputNode null) and array links;
+    the instance node carries the slot names/types."""
+    sg = bp["definitions"]["subgraphs"][0]
+    _arrayify_links(sg)
+    sg["inputs"] = None
+    sg["outputs"] = None
+    sg["inputNode"] = None
+    sg["outputNode"] = None
+    return bp
+
+
+class TestLiveDesktopFormat(unittest.TestCase):
+    """Comfy Desktop sends defs without boundary declarations — they must be
+    reconstructed from the instance node (observed live payload 2026-07)."""
+
+    def test_reconstructed_boundaries_convert(self):
+        r = ondemand.preflight(_live_ify(load("mask_blueprint.json")), schemas())
+        self.assertTrue(r["ok"], r["errors"])
+        self.assertTrue(r["instant_testable"])
+        self.assertEqual([o["type"] for o in r["outputs"]], ["MASK"])
+        self.assertEqual([i["name"] for i in r["inputs"]], ["image"])
+
+    def test_proxy_widget_inputs_do_not_become_slots(self):
+        # instance inputs beyond the highest -10 slot are promoted widgets,
+        # not boundary slots — reconstruction must cut them off
+        bp = _live_ify(load("mask_blueprint.json"))
+        bp["nodes"][0]["inputs"].append(
+            {"name": "channel", "type": "COMBO", "widget": {"name": "channel"},
+             "link": None})
+        r = ondemand.preflight(bp, schemas())
+        self.assertTrue(r["ok"], r["errors"])
+        self.assertEqual([i["name"] for i in r["inputs"] if i["kind"] == "slot"],
+                         ["image"])
+
+
+class TestUnsupportedInputPolicy(unittest.TestCase):
+    """Non-transferable boundary input types: dropped when every target is
+    optional in the cloud schema, hard error when a required input depends."""
+
+    def _with_bbox_input(self, target_slot, target_name):
+        bp = load("mask_blueprint.json")
+        sg = bp["definitions"]["subgraphs"][0]
+        sg["inputs"].append({"id": "mi2", "name": "bboxes",
+                             "type": "BOUNDING_BOX", "linkIds": [9]})
+        node = sg["nodes"][0]  # ImageToMask
+        while len(node["inputs"]) <= target_slot:
+            node["inputs"].append({"name": target_name, "type": "BOUNDING_BOX",
+                                   "link": None})
+        node["inputs"][target_slot]["link"] = 9
+        sg["links"].append({"id": 9, "origin_id": -10, "origin_slot": 1,
+                            "target_id": 20, "target_slot": target_slot,
+                            "type": "BOUNDING_BOX"})
+        return bp
+
+    def test_optional_target_drops_input_with_hint(self):
+        sc = copy.deepcopy(CLOUD_OBJECT_INFO)
+        sc["ImageToMask"]["input"].setdefault("optional", {})["bboxes"] = \
+            ["BOUNDING_BOX", {}]
+        r = ondemand.preflight(self._with_bbox_input(2, "bboxes"),
+                               SchemaSource(sc, use_local=False))
+        self.assertTrue(r["ok"], r["errors"])
+        self.assertNotIn("bboxes", [i["name"] for i in r["inputs"]])
+        self.assertTrue(any("cannot cross" in w for w in r["warnings"]))
+
+    def test_required_target_rejects_blueprint(self):
+        # wire the BOUNDING_BOX boundary into required 'channel' → dysfunctional
+        r = ondemand.preflight(self._with_bbox_input(1, "channel"), schemas())
+        self.assertFalse(r["ok"])
+        self.assertTrue(any("required input depends" in e for e in r["errors"]),
+                        r["errors"])
+
+
 class TestSaveBlueprint(unittest.TestCase):
     def test_save_writes_a_probeable_blueprint(self):
         from comfycloudhybrid.scanner import _probe
