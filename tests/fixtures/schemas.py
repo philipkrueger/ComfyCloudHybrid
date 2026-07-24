@@ -10,6 +10,20 @@ CLOUD_OBJECT_INFO = {
         "output": ["STRING"],
         "output_node": True,
     },
+    "LoadAudio": {
+        "input": {"required": {"audio": ["COMBO", {"audio_upload": True,
+                                                   "options": []}]}},
+        "output": ["AUDIO"],
+    },
+    "SaveAudio": {
+        "input": {"required": {"audio": ["AUDIO", {}],
+                               "filename_prefix": ["STRING", {}]}},
+        "output_node": True,
+    },
+    "FakeAudioProc": {
+        "input": {"required": {"audio": ["AUDIO", {}]}},
+        "output": ["AUDIO"],
+    },
     "GeminiImageNode": {
         "api_node": True,
         "input": {

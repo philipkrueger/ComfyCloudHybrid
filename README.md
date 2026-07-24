@@ -97,15 +97,16 @@ nodes apply — models referenced inside the subgraph must exist on Comfy Cloud.
 
 ## Limits & behavior
 
-- Inputs: IMAGE/MASK and value types (STRING/INT/FLOAT/BOOLEAN/COMBO).
+- Inputs: IMAGE/MASK, **AUDIO** (encoded as lossless FLAC, uploaded, loaded
+  via LoadAudio) and value types (STRING/INT/FLOAT/BOOLEAN/COMBO).
   Non-transferable input types (e.g. BOUNDING_BOX) are dropped with a hint as
   long as every input they feed is optional in the cloud.
   Outputs: IMAGE, **MASK** (saved as a grayscale image, returned as a MASK
-  tensor), **VIDEO** (via SaveVideo) and **value outputs** —
-  STRING/INT/FLOAT/BOOLEAN and BOUNDING_BOX travel back through the job
-  history (PreviewAny text channel), which enables captioning/prompt-gen
-  subgraphs. AUDIO and latent-side boundaries (LATENT/MODEL/CLIP) are still
-  skipped with a clear note.
+  tensor), **VIDEO** (via SaveVideo), **AUDIO** (via SaveAudio/FLAC, returned
+  as an AUDIO waveform) and **value outputs** — STRING/INT/FLOAT/BOOLEAN and
+  BOUNDING_BOX travel back through the job history (PreviewAny text channel),
+  which enables captioning/prompt-gen subgraphs. Latent-side boundaries
+  (LATENT/MODEL/CLIP) are still skipped with a clear note.
 - Cost: after the job the node shows the **GPU time** (the cloud's billing
   basis) — the API does not expose exact credits, so GPU seconds are the honest
   approximation. Status displays and error messages are in English.

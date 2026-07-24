@@ -269,6 +269,55 @@ class TestValueOutputs(unittest.TestCase):
         self.assertIn("image/video output", r["generic_reason"])
 
 
+def _audio_blueprint():
+    """AUDIO in → FakeAudioProc → AUDIO out."""
+    uid = "eeeeeeee-0000-0000-0000-000000000001"
+    return {
+        "version": 0.4, "links": [], "extra": {},
+        "nodes": [{"id": 50, "type": uid,
+                   "inputs": [{"name": "audio", "type": "AUDIO", "link": None}],
+                   "outputs": [{"name": "AUDIO", "type": "AUDIO", "links": []}],
+                   "properties": {}, "widgets_values": []}],
+        "definitions": {"subgraphs": [{
+            "id": uid, "name": "Tiny Audio", "version": 1,
+            "inputNode": {"id": -10}, "outputNode": {"id": -20},
+            "widgets": [], "groups": [], "extra": {},
+            "inputs": [{"id": "ai1", "name": "audio", "type": "AUDIO",
+                        "linkIds": [1]}],
+            "outputs": [{"id": "ao1", "name": "AUDIO", "type": "AUDIO",
+                         "linkIds": [3]}],
+            "nodes": [{"id": 10, "type": "FakeAudioProc",
+                       "inputs": [{"name": "audio", "type": "AUDIO", "link": 1}],
+                       "outputs": [{"name": "AUDIO", "type": "AUDIO",
+                                    "links": [3]}],
+                       "properties": {}, "widgets_values": []}],
+            "links": [
+                {"id": 1, "origin_id": -10, "origin_slot": 0, "target_id": 10,
+                 "target_slot": 0, "type": "AUDIO"},
+                {"id": 3, "origin_id": 10, "origin_slot": 0, "target_id": -20,
+                 "target_slot": 0, "type": "AUDIO"}],
+        }]},
+    }
+
+
+class TestAudioBoundary(unittest.TestCase):
+    def test_audio_in_and_out_convert(self):
+        r = ondemand.preflight(_audio_blueprint(), schemas())
+        self.assertTrue(r["ok"], r["errors"])
+        self.assertEqual([i["type"] for i in r["inputs"]], ["AUDIO"])
+        self.assertEqual([o["type"] for o in r["outputs"]], ["AUDIO"])
+
+    def test_audio_output_uses_saveaudio(self):
+        cw = convert(_audio_blueprint(), schemas())
+        save = cw.prompt[cw.outputs[0].save_node_key]
+        self.assertEqual(save["class_type"], "SaveAudio")
+        self.assertEqual(save["inputs"]["audio"], ["50:10", 0])
+
+    def test_audio_not_instant_testable(self):
+        r = ondemand.preflight(_audio_blueprint(), schemas())
+        self.assertFalse(r["instant_testable"])
+
+
 class TestSaveBlueprint(unittest.TestCase):
     def test_save_writes_a_probeable_blueprint(self):
         from comfycloudhybrid.scanner import _probe

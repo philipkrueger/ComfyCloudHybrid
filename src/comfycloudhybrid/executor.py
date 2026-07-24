@@ -71,6 +71,65 @@ def png_bytes_to_tensor(data: bytes):
     return torch.from_numpy(arr)[None,]
 
 
+def audio_to_flac_bytes(audio) -> bytes:
+    """ComfyUI AUDIO dict {"waveform": [B,C,T]|[C,T] float -1..1,
+    "sample_rate": int} → FLAC bytes (lossless, 16-bit PCM)."""
+    import av
+    import numpy as np
+
+    waveform = audio["waveform"]
+    if hasattr(waveform, "cpu"):
+        waveform = waveform.cpu()
+    import torch
+    waveform = torch.as_tensor(waveform)
+    if waveform.dim() == 3:
+        waveform = waveform[0]
+    sr = int(audio["sample_rate"])
+    n_ch = waveform.shape[0]
+    pcm = (waveform.clamp(-1.0, 1.0).numpy() * 32767.0).astype(np.int16)  # [C,T]
+    interleaved = np.ascontiguousarray(pcm.T.reshape(1, -1))  # packed s16
+
+    buf = _io.BytesIO()
+    with av.open(buf, "w", format="flac") as container:
+        layout = "mono" if n_ch == 1 else "stereo"
+        stream = container.add_stream("flac", rate=sr, layout=layout)
+        frame = av.AudioFrame.from_ndarray(interleaved, format="s16", layout=layout)
+        frame.sample_rate = sr
+        for packet in stream.encode(frame):
+            container.mux(packet)
+        for packet in stream.encode(None):  # flush
+            container.mux(packet)
+    return buf.getvalue()
+
+
+def flac_bytes_to_audio(data: bytes) -> dict:
+    """Audio file bytes → ComfyUI AUDIO dict (mirrors core LoadAudio: PyAV
+    decode to f32 PCM). Inverse of audio_to_flac_bytes."""
+    import av
+    import torch
+
+    with av.open(_io.BytesIO(data)) as af:
+        if not af.streams.audio:
+            raise CloudError("Cloud audio output contains no audio stream.")
+        stream = af.streams.audio[0]
+        sr = stream.codec_context.sample_rate
+        n_channels = stream.channels
+        frames = []
+        for frame in af.decode(streams=stream.index):
+            fbuf = torch.from_numpy(frame.to_ndarray())
+            if fbuf.shape[0] != n_channels:
+                fbuf = fbuf.view(-1, n_channels).t()
+            frames.append(fbuf)
+        if not frames:
+            raise CloudError("Cloud audio output decoded to zero frames.")
+        wav = torch.cat(frames, dim=1)
+    if wav.dtype.is_floating_point:
+        wav = wav.float()
+    else:
+        wav = wav.float() / (2 ** (8 * wav.element_size() - 1))
+    return {"waveform": wav[None, ...], "sample_rate": sr}
+
+
 def png_bytes_to_mask(data: bytes):
     """PNG/JPEG/WebP bytes → ComfyUI MASK tensor [1,H,W] float 0..1.
 
@@ -243,7 +302,7 @@ async def _inject_inputs(client, prompt: dict, converted: ConvertedWorkflow,
                          bound_values: dict) -> None:
     for bi in converted.inputs:
         provided = bi.safe_id in bound_values and bound_values[bi.safe_id] is not None
-        if bi.type in ("IMAGE", "MASK"):
+        if bi.type in ("IMAGE", "MASK", "AUDIO"):
             if not provided:
                 _drop_sentinels(prompt, bi.safe_id)
                 continue
@@ -252,6 +311,10 @@ async def _inject_inputs(client, prompt: dict, converted: ConvertedWorkflow,
                 data = tensor_to_png_bytes(value)
                 name = await upload_cached(client, data, f"cch_{bi.safe_id}.png")
                 loader_key, src = _ensure_loader(prompt, bi.safe_id, name)
+            elif bi.type == "AUDIO":
+                data = audio_to_flac_bytes(value)
+                name = await upload_cached(client, data, f"cch_{bi.safe_id}.flac")
+                loader_key, src = _ensure_audio_loader(prompt, bi.safe_id, name)
             else:
                 data = mask_to_png_bytes(value)
                 name = await upload_cached(client, data, f"cch_{bi.safe_id}.png")
@@ -301,6 +364,13 @@ def _ensure_loader(prompt: dict, safe_id: str, cloud_name: str):
     key = f"cch_load_{safe_id}"
     prompt[key] = {"class_type": "LoadImage", "inputs": {"image": cloud_name},
                    "_meta": {"title": f"CloudHybrid Input {safe_id}"}}
+    return key, [key, 0]
+
+
+def _ensure_audio_loader(prompt: dict, safe_id: str, cloud_name: str):
+    key = f"cch_load_{safe_id}"
+    prompt[key] = {"class_type": "LoadAudio", "inputs": {"audio": cloud_name},
+                   "_meta": {"title": f"CloudHybrid Audio Input {safe_id}"}}
     return key, [key, 0]
 
 
@@ -411,6 +481,12 @@ async def _collect_outputs(client, converted: ConvertedWorkflow, detail: dict) -
                 filename=im.get("filename", ""), subfolder=im.get("subfolder", ""),
                 type=im.get("type", "output"))
             result.append(_bytes_to_video(data))
+        elif bo.type == "AUDIO":
+            im = files[0]
+            data = await client.download_output(
+                filename=im.get("filename", ""), subfolder=im.get("subfolder", ""),
+                type=im.get("type", "output"))
+            result.append(flac_bytes_to_audio(data))
         else:
             to_tensor = png_bytes_to_mask if bo.type == "MASK" else png_bytes_to_tensor
             tensors = []

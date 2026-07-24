@@ -31,7 +31,8 @@ log = logging.getLogger("ComfyCloudHybrid")
 
 # Classes whose "image" widget references a file in the input directory that
 # must be uploaded to the cloud before the job runs.
-UPLOAD_CLASSES = {"LoadImage": "image", "LoadImageMask": "image"}
+UPLOAD_CLASSES = {"LoadImage": "image", "LoadImageMask": "image",
+                  "LoadAudio": "audio"}
 
 # Pure pass-through nodes the cloud does not expose as executable classes —
 # collapsed during flattening (link resolution follows through them). Only
@@ -57,7 +58,7 @@ def _is_local_capable(prompt: dict, schemas: SchemaSource) -> bool:
     """True when no emitted node needs AI weights or a partner API."""
     for entry in prompt.values():
         cls = entry.get("class_type", "")
-        if cls in ("SaveImage", "SaveVideo", "PreviewAny"):
+        if cls in ("SaveImage", "SaveVideo", "SaveAudio", "PreviewAny"):
             continue
         if (schemas.get_cloud(cls) or {}).get("api_node"):
             return False
@@ -133,6 +134,8 @@ def convert(blueprint: dict, schemas: SchemaSource, fallback_name: str = "") -> 
             bi_type = "IMAGE"
         elif "MASK" in parts:
             bi_type = "MASK"
+        elif "AUDIO" in parts:
+            bi_type = "AUDIO"
         elif any(p in VALUE_TYPES for p in parts):
             # COMBO slots (model selectors like unet_name) stay COMBO — their
             # options are resolved from the cloud schema of the target input
@@ -224,6 +227,14 @@ def convert(blueprint: dict, schemas: SchemaSource, fallback_name: str = "") -> 
                 "inputs": {"images": [conv_key, 0], "filename_prefix": file_prefix},
                 "_meta": {"title": f"CloudHybrid Output {disp}"},
             }
+        elif typ == "AUDIO":
+            # FLAC is lossless; the executor decodes the downloaded file back
+            # into {"waveform", "sample_rate"} (executor.flac_bytes_to_audio)
+            ctx.prompt[save_key] = {
+                "class_type": "SaveAudio",
+                "inputs": {"audio": res[1], "filename_prefix": file_prefix},
+                "_meta": {"title": f"CloudHybrid Output {disp}"},
+            }
         elif typ in VALUE_OUTPUT_TYPES:
             # text channel: PreviewAny puts str()/json.dumps() of any value
             # into the job history ({"ui": {"text": [...]}}); the executor
@@ -236,8 +247,8 @@ def convert(blueprint: dict, schemas: SchemaSource, fallback_name: str = "") -> 
         else:
             ctx.warnings.append(
                 f"Output '{disp}' ({typ}) is skipped — transferable are IMAGE, "
-                "MASK, VIDEO, value types (STRING/INT/FLOAT/BOOLEAN) and "
-                "BOUNDING_BOX")
+                "MASK, VIDEO, AUDIO, value types (STRING/INT/FLOAT/BOOLEAN) "
+                "and BOUNDING_BOX")
             continue
         outputs.append(BoundOutput(name=disp, type=typ, save_node_key=save_key))
     if not outputs and not ctx.missing:

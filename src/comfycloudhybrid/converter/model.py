@@ -26,7 +26,9 @@ class UnsupportedTypeError(Exception):
 
 
 VALUE_TYPES = {"STRING", "INT", "FLOAT", "BOOLEAN", "COMBO"}
-TENSOR_TYPES = {"IMAGE", "MASK"}
+# boundary types shipped as uploaded/downloaded files with a tensor(-dict)
+# representation locally: IMAGE/MASK as PNG, AUDIO as FLAC
+TENSOR_TYPES = {"IMAGE", "MASK", "AUDIO"}
 
 # output types transferred back through PreviewAny's text channel: the cloud
 # job's history carries {"text": [...]} per node — strings verbatim, numbers

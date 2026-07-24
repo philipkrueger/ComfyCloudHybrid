@@ -33,6 +33,8 @@ def _build_input(bi: BoundInput):
         return io.Image.Input(bi.safe_id, **common)
     if bi.type == "MASK":
         return io.Mask.Input(bi.safe_id, **common)
+    if bi.type == "AUDIO":
+        return io.Audio.Input(bi.safe_id, **common)
     if bi.type == "INT":
         default = bi.default if isinstance(bi.default, int) else 0
         # honour the cloud's declared range (seed: 0..2^64-1) so frontend
@@ -86,6 +88,7 @@ def _build_input(bi: BoundInput):
 _OUTPUT_IO = {
     "VIDEO": io.Video.Output,
     "MASK": io.Mask.Output,
+    "AUDIO": io.Audio.Output,
     "STRING": io.String.Output,
     "INT": io.Int.Output,
     "FLOAT": io.Float.Output,

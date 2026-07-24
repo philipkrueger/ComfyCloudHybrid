@@ -406,6 +406,52 @@ class ValueOutputParseTest(unittest.TestCase):
             executor._parse_value_output("BOUNDING_BOX", "<tensor blob>")
 
 
+class AudioRoundTripTest(unittest.TestCase):
+    """audio_to_flac_bytes ∘ flac_bytes_to_audio must preserve the waveform
+    (FLAC is lossless; only 16-bit quantization applies)."""
+
+    def test_round_trip(self):
+        import torch
+        t = torch.linspace(0, 1, 4410)
+        wave = torch.stack([torch.sin(2 * 3.14159 * 440 * t),
+                            torch.sin(2 * 3.14159 * 220 * t)]) * 0.5  # [2,T]
+        audio = {"waveform": wave[None, ...], "sample_rate": 44100}
+        flac = executor.audio_to_flac_bytes(audio)
+        self.assertGreater(len(flac), 100)
+        back = executor.flac_bytes_to_audio(flac)
+        self.assertEqual(back["sample_rate"], 44100)
+        self.assertEqual(tuple(back["waveform"].shape), (1, 2, 4410))
+        diff = (back["waveform"][0] - wave).abs().max().item()
+        self.assertLess(diff, 1e-3, f"quantization drift too large: {diff}")
+
+    def test_mono_and_2d_input(self):
+        import torch
+        audio = {"waveform": torch.zeros(1, 2205), "sample_rate": 22050}  # [C,T]
+        back = executor.flac_bytes_to_audio(executor.audio_to_flac_bytes(audio))
+        self.assertEqual(tuple(back["waveform"].shape), (1, 1, 2205))
+
+
+class CollectAudioOutputTest(unittest.IsolatedAsyncioTestCase):
+    async def test_audio_output_downloaded_and_decoded(self):
+        import torch
+        from comfycloudhybrid.converter.model import BoundOutput, ConvertedWorkflow
+        flac = executor.audio_to_flac_bytes(
+            {"waveform": torch.zeros(1, 1, 1000), "sample_rate": 16000})
+
+        class StubClient:
+            async def download_output(self, filename, subfolder, type):
+                return flac
+
+        cw = ConvertedWorkflow(name="t", prompt={}, inputs=[],
+                               outputs=[BoundOutput("AUDIO", "AUDIO", "cch_save_0")],
+                               required_uploads=[])
+        detail = {"outputs": {"cch_save_0": {"audio": [
+            {"filename": "a.flac", "subfolder": "", "type": "output"}]}}}
+        (result,) = await executor._collect_outputs(StubClient(), cw, detail)
+        self.assertEqual(result["sample_rate"], 16000)
+        self.assertEqual(tuple(result["waveform"].shape), (1, 1, 1000))
+
+
 class CollectTextOutputsTest(unittest.IsolatedAsyncioTestCase):
     async def test_text_outputs_collected_without_downloads(self):
         from comfycloudhybrid.converter.model import BoundOutput, ConvertedWorkflow

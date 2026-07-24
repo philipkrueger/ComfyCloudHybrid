@@ -43,11 +43,12 @@ ausgeführt — Inputs hochladen, Job pollen, Bilder zurückladen.
 
 ## Bekannte Grenzen
 
-- Subgraph-Grenzen: rein IMAGE/MASK/Werte (nicht übertragbare Input-Typen wie
-  BOUNDING_BOX werden gedroppt, wenn alle Ziele optional sind). Raus: IMAGE,
-  MASK (MaskToImage→SaveImage), VIDEO, plus Wert-Outputs STRING/INT/FLOAT/
+- Subgraph-Grenzen: rein IMAGE/MASK/AUDIO (FLAC-Upload→LoadAudio)/Werte
+  (nicht übertragbare Input-Typen wie BOUNDING_BOX werden gedroppt, wenn alle
+  Ziele optional sind). Raus: IMAGE, MASK (MaskToImage→SaveImage), VIDEO,
+  AUDIO (SaveAudio/FLAC→Waveform), plus Wert-Outputs STRING/INT/FLOAT/
   BOOLEAN/BOUNDING_BOX über den PreviewAny-Text-Kanal (History `text`).
-  AUDIO/LATENT/MODEL/CLIP-Ausgänge werden übersprungen (mit Hinweis).
+  LATENT/MODEL/CLIP-Ausgänge werden übersprungen (mit Hinweis).
 - Neue Blueprints ⇒ ComfyUI-Neustart (Rescan lädt nur Konvertierungen hot).
 - Nested-Instance-Proxywidgets werden als Defaults eingebacken, nicht promoted.
 - Reroute-Nodes werden beim Flattening kollabiert (PASSTHROUGH_CLASSES in flatten.py).
