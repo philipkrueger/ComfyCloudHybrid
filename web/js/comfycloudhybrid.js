@@ -141,25 +141,142 @@ function showReportDialog(title, report) {
     document.body.appendChild(overlay);
 }
 
-// Drop a pre-filled generic runner next to the source subgraph.
-function spawnGenericNode(sourceNode, report) {
+// Create the pre-filled generic runner node (not yet positioned/wired).
+function createGenericNode(report) {
     const node = LiteGraph.createNode(GENERIC_NODE_TYPE);
     if (!node) {
         toast("error", "Comfy Cloud",
             "Generic runner node not found — restart ComfyUI so the pack loads.");
-        return;
+        return null;
     }
     app.graph.add(node);
-    if (sourceNode?.pos) node.pos = [sourceNode.pos[0], sourceNode.pos[1] + 160];
     const w = node.widgets?.find((x) => x.name === "workflow_json");
     if (w) w.value = report.generic_json;
     node.title = `☁ ${report.name || "Cloud"} (test)`;
+    return node;
+}
+
+function getLink(id) {
+    const links = app.graph.links;
+    if (!links || id == null) return null;
+    return typeof links.get === "function" ? links.get(id) : links[id];
+}
+
+// Insert next to the source subgraph, keep the subgraph untouched.
+function insertGenericNode(sourceNode, report) {
+    const node = createGenericNode(report);
+    if (!node) return;
+    if (sourceNode?.pos) node.pos = [sourceNode.pos[0], sourceNode.pos[1] + 160];
     app.graph.setDirtyCanvas(true, true);
     const imgs = (report.image_inputs || []).map((i) => `${i.token} ← ${i.name}`).join(", ");
     toast("success", "Comfy Cloud",
         `Instant node created for “${report.name}”.` +
         (imgs ? ` Connect image inputs: ${imgs}.` : ""));
-    if ((report.warnings || []).length) showReportDialog("Conversion hints", report);
+}
+
+// Swap the subgraph for the generic node: rewire incoming image links to
+// image_1…N (by boundary-input name), move IMAGE-output links onto the
+// generic node's single IMAGE output, then remove the subgraph.
+function replaceWithGenericNode(sourceNode, report) {
+    const node = createGenericNode(report);
+    if (!node) return;
+    const skipped = [];
+    try {
+        (report.image_inputs || []).forEach((map, i) => {
+            const srcIdx = (sourceNode.inputs || []).findIndex(
+                (inp) => inp.label === map.name || inp.name === map.name);
+            const linkId = srcIdx >= 0 ? sourceNode.inputs[srcIdx].link : null;
+            const link = getLink(linkId);
+            const origin = link && app.graph.getNodeById(link.origin_id);
+            const dstIdx = (node.inputs || []).findIndex(
+                (inp) => inp.name === `image_${i + 1}`);
+            if (origin && dstIdx >= 0) origin.connect(link.origin_slot, node, dstIdx);
+        });
+        const imgOut = (sourceNode.outputs || []).findIndex((o) => o.type === "IMAGE");
+        (sourceNode.outputs || []).forEach((out, oi) => {
+            for (const lid of [...(out.links || [])]) {
+                const link = getLink(lid);
+                const target = link && app.graph.getNodeById(link.target_id);
+                if (!target) continue;
+                if (oi === imgOut) node.connect(0, target, link.target_slot);
+                else skipped.push(out.label || out.name || out.type);
+            }
+        });
+        node.pos = [...sourceNode.pos];
+        app.graph.remove(sourceNode);
+    } catch (e) {
+        console.warn("[ComfyCloudHybrid] replace failed:", e);
+        toast("warn", "Comfy Cloud",
+            `Rewiring failed (${e.message || e}) — the cloud node was inserted, ` +
+            "the subgraph was kept.");
+        if (sourceNode?.pos) node.pos = [sourceNode.pos[0], sourceNode.pos[1] + 160];
+        app.graph.setDirtyCanvas(true, true);
+        return;
+    }
+    app.graph.setDirtyCanvas(true, true);
+    toast("success", "Comfy Cloud",
+        `Subgraph replaced by “${node.title}”.` +
+        (skipped.length ? ` Not rewired (no slot on the instant node): ` +
+            [...new Set(skipped)].join(", ") + "." : ""));
+}
+
+// Success banner: Insert / Replace / Cancel + mapping info and hints.
+function showConvertActions(sourceNode, report) {
+    const overlay = document.createElement("div");
+    overlay.style.cssText =
+        "position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:3000;" +
+        "display:flex;align-items:center;justify-content:center;";
+    const box = document.createElement("div");
+    box.style.cssText =
+        "max-width:min(560px,90vw);max-height:80vh;overflow:auto;padding:1.2rem 1.4rem;" +
+        "border-radius:10px;background:var(--comfy-menu-bg,#20202a);color:#eee;" +
+        "box-shadow:0 8px 40px rgba(0,0,0,.6);font-size:.85rem;line-height:1.5;";
+    const h = document.createElement("h3");
+    h.textContent = `Cloud node ready — ${report.name || "subgraph"}`;
+    h.style.cssText = "margin:0 0 .6rem;font-size:1rem;";
+    box.appendChild(h);
+
+    const addList = (label, items, color) => {
+        if (!items || !items.length) return;
+        const t = document.createElement("div");
+        t.textContent = label;
+        t.style.cssText = `margin:.6rem 0 .25rem;font-weight:600;color:${color};`;
+        const ul = document.createElement("ul");
+        ul.style.cssText = "margin:0;padding-left:1.1rem;";
+        for (const it of items) {
+            const li = document.createElement("li");
+            li.textContent = it;
+            ul.appendChild(li);
+        }
+        box.append(t, ul);
+    };
+    addList("Image inputs", (report.image_inputs || []).map(
+        (i) => `${i.token} ← ${i.name}`), "#8bd");
+    addList("Baked to defaults", (report.baked_inputs || []).map(
+        (b) => `${b.name} = ${JSON.stringify(b.value)}`), "#8bd");
+    addList("Hints", report.warnings, "#f5b942");
+
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;gap:.6rem;margin-top:1rem;";
+    const mkBtn = (label, primary, fn) => {
+        const b = document.createElement("button");
+        b.textContent = label;
+        b.style.cssText =
+            "padding:.4rem .9rem;border-radius:6px;border:none;cursor:pointer;" +
+            "font-size:.85rem;" + (primary
+                ? "background:var(--p-primary-color,#4f9cf9);color:#fff;"
+                : "background:#3a3a44;color:#ddd;");
+        b.onclick = () => { overlay.remove(); if (fn) fn(); };
+        return b;
+    };
+    row.append(
+        mkBtn("Replace subgraph", true, () => replaceWithGenericNode(sourceNode, report)),
+        mkBtn("Insert next to it", false, () => insertGenericNode(sourceNode, report)),
+        mkBtn("Cancel", false, null));
+    box.appendChild(row);
+    overlay.appendChild(box);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
 }
 
 async function convertSubgraph(node, mode) {
@@ -202,7 +319,7 @@ async function convertSubgraph(node, mode) {
 
     // mode === "test"
     if (report.instant_testable) {
-        spawnGenericNode(node, report);
+        showConvertActions(node, report);
     } else {
         toast("warn", "Comfy Cloud",
             `“${report.name}” can't run on the instant node (${report.generic_reason}). ` +

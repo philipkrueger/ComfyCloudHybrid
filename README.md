@@ -79,10 +79,12 @@ hot without a restart).
 Right-click any **subgraph** on the canvas → two entries:
 
 - **☁ Convert to Cloud API Node (test)** — validates the subgraph and, if it
-  can run on the cloud, drops a pre-filled *☁ Run Cloud Workflow* node next to
-  it (image inputs mapped to `%CCH_IMAGE_N%`, promoted widgets baked to their
-  defaults). No restart — good for quickly testing a segment you carved out of
-  a template into a subgraph.
+  can run on the cloud, offers **Replace subgraph** (swap it in place: image
+  links and IMAGE outputs are rewired automatically) or **Insert next to it**
+  — a pre-filled *☁ Run Cloud Workflow* node (image inputs mapped to
+  `%CCH_IMAGE_N%`, promoted widgets baked to their defaults). No restart —
+  good for quickly testing a segment you carved out of a template into a
+  subgraph.
 - **☁ Save as Cloud Node (permanent)** — persists the subgraph under
   `saved_blueprints/` and, after a ComfyUI restart, registers it as a proper
   named cloud node with all its inputs (the full-fidelity path; the instant
