@@ -328,21 +328,31 @@ async function convertSubgraph(node, mode) {
     }
 }
 
-// Add the two entries to any subgraph node's right-click menu.
+// The two context-menu entries for subgraph nodes.
+function subgraphMenuItems(node) {
+    if (!isSubgraphNode(node)) return [];
+    return [null, {
+        content: "☁ Convert to Cloud API Node (test)",
+        callback: () => convertSubgraph(node, "test"),
+    }, {
+        content: "☁ Save as Cloud Node (permanent)",
+        callback: () => convertSubgraph(node, "save"),
+    }];
+}
+
+// Frontend ≥1.47 invokes the official extension hook getNodeMenuItems (see
+// registerExtension below). Once it fires we know the registry path is live
+// and the legacy monkey-patch must stay silent — 1.47's compat layer would
+// otherwise extract its items a second time (duplicate entries).
+let officialMenuHookActive = false;
+
+// Legacy path for older frontends: patch the canvas menu builder directly.
 function installSubgraphMenu() {
     if (typeof LGraphCanvas === "undefined" || !LGraphCanvas.prototype) return;
     const orig = LGraphCanvas.prototype.getNodeMenuOptions;
     LGraphCanvas.prototype.getNodeMenuOptions = function (node) {
         const options = orig ? orig.apply(this, arguments) : [];
-        if (isSubgraphNode(node)) {
-            options.push(null, {
-                content: "☁ Convert to Cloud API Node (test)",
-                callback: () => convertSubgraph(node, "test"),
-            }, {
-                content: "☁ Save as Cloud Node (permanent)",
-                callback: () => convertSubgraph(node, "save"),
-            });
-        }
+        if (!officialMenuHookActive) options.push(...subgraphMenuItems(node));
         return options;
     };
 }
@@ -515,6 +525,12 @@ app.registerExtension({
             function: rescanBlueprints,
         },
     ],
+    // official node-context-menu hook (frontend ≥1.47): collected via
+    // collectNodeMenuItems → invokeExtensions("getNodeMenuItems", node)
+    getNodeMenuItems(node) {
+        officialMenuHookActive = true;
+        return subgraphMenuItems(node);
+    },
     async setup() {
         try { installSubgraphMenu(); }
         catch (e) { console.warn("[ComfyCloudHybrid] subgraph menu not installed:", e); }
