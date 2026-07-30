@@ -564,8 +564,16 @@ async def run_raw_prompt(prompt: dict, image_tokens: dict[str, "object"],
             ws_task.cancel()
         reporter.done(ComfyCloudClient.gpu_seconds(detail))
 
+        # collect EVERY transferable result kind — the converter emits
+        # SaveImage/SaveVideo/SaveAudio/PreviewAny sinks, and a hand-pasted
+        # API workflow may contain any of them too
         tensors = []
+        video = None
+        audio = None
+        texts: list[str] = []
+        found_keys: set[str] = set()
         for node_out in (detail.get("outputs") or {}).values():
+            found_keys.update(k for k, v in node_out.items() if v)
             for im in node_out.get("images") or []:
                 if im.get("type") != "output":
                     continue
@@ -573,7 +581,33 @@ async def run_raw_prompt(prompt: dict, image_tokens: dict[str, "object"],
                     filename=im.get("filename", ""),
                     subfolder=im.get("subfolder", ""), type="output")
                 tensors.append(png_bytes_to_tensor(data))
-        if not tensors:
-            raise CloudError("Cloud job finished but no image outputs found. "
-                             "Does the workflow contain a SaveImage node?")
-        return _batch(tensors)
+            if video is None:
+                for key in ("video", "videos", "gifs"):
+                    files = node_out.get(key) or []
+                    if files:
+                        f = files[0]
+                        data = await client.download_output(
+                            filename=f.get("filename", ""),
+                            subfolder=f.get("subfolder", ""),
+                            type=f.get("type", "output"))
+                        video = _bytes_to_video(data)
+                        break
+            if audio is None:
+                files = node_out.get("audio") or []
+                if files:
+                    f = files[0]
+                    data = await client.download_output(
+                        filename=f.get("filename", ""),
+                        subfolder=f.get("subfolder", ""),
+                        type=f.get("type", "output"))
+                    audio = flac_bytes_to_audio(data)
+            for t in node_out.get("text") or []:
+                texts.append(str(t))
+        if not tensors and video is None and audio is None and not texts:
+            raise CloudError(
+                "Cloud job finished but produced no transferable output "
+                "(image/video/audio/text). Does the workflow contain a save "
+                "or preview node?",
+                detail=f"history output keys: {sorted(found_keys) or 'none'}")
+        image = _batch(tensors) if tensors else None
+        return image, video, audio, ("\n".join(texts) if texts else None)

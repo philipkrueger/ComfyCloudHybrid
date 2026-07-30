@@ -27,7 +27,9 @@ class CloudHybridRunWorkflow(io.ComfyNode):
                 "(File → Export (API)). Image inputs: put the placeholders "
                 "%CCH_IMAGE_1%…%CCH_IMAGE_4% as input values in the JSON (e.g. in "
                 "a LoadImage 'image' field) and connect the images here. "
-                "Returns all image outputs of the cloud job as a batch."),
+                "Returns whatever the cloud job produced: image outputs as one "
+                "batch, plus the first VIDEO / AUDIO output and any preview "
+                "text (unused outputs stay empty)."),
             inputs=[
                 io.String.Input("workflow_json", multiline=True, default="",
                                 tooltip="API-format workflow JSON (or a path to a .json file)"),
@@ -38,7 +40,12 @@ class CloudHybridRunWorkflow(io.ComfyNode):
                 io.Int.Input("timeout_s", default=600, min=30, max=3600,
                              tooltip="Maximum time to wait for the cloud job"),
             ],
-            outputs=[io.Image.Output(display_name="IMAGE")],
+            outputs=[
+                io.Image.Output(display_name="IMAGE"),
+                io.Video.Output(display_name="VIDEO"),
+                io.Audio.Output(display_name="AUDIO"),
+                io.String.Output(display_name="TEXT"),
+            ],
             hidden=[io.Hidden.unique_id],
             not_idempotent=True,
         )
@@ -66,6 +73,6 @@ class CloudHybridRunWorkflow(io.ComfyNode):
             raise CloudError("This is the UI workflow format. Please export in "
                              "API format (File → Export (API)).")
         images = dict(zip(TOKENS, [image_1, image_2, image_3, image_4]))
-        result = await executor.run_raw_prompt(prompt, images, timeout_s=timeout_s,
-                                               node_id=cls.hidden.unique_id)
-        return io.NodeOutput(result)
+        image, video, audio, text = await executor.run_raw_prompt(
+            prompt, images, timeout_s=timeout_s, node_id=cls.hidden.unique_id)
+        return io.NodeOutput(image, video, audio, text)

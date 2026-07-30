@@ -307,11 +307,10 @@ class TestValueOutputs(unittest.TestCase):
         self.assertEqual(save["class_type"], "PreviewAny")
         self.assertEqual(save["inputs"]["source"], ["50:10", 0])
 
-    def test_value_only_subgraph_not_instant_testable(self):
-        # the generic runner returns images — value outputs need the full node
+    def test_value_only_subgraph_is_instant_testable(self):
+        # the generic runner returns preview text on its TEXT output now
         r = ondemand.preflight(_string_blueprint(), schemas())
-        self.assertFalse(r["instant_testable"])
-        self.assertIn("image/video output", r["generic_reason"])
+        self.assertTrue(r["instant_testable"], r.get("generic_reason"))
 
 
 def _audio_blueprint():
@@ -358,9 +357,12 @@ class TestAudioBoundary(unittest.TestCase):
         self.assertEqual(save["class_type"], "SaveAudio")
         self.assertEqual(save["inputs"]["audio"], ["50:10", 0])
 
-    def test_audio_not_instant_testable(self):
+    def test_audio_output_is_instant_testable_but_audio_input_blocks(self):
+        # AUDIO output → fine (generic AUDIO output); the AUDIO *input* still
+        # cannot be supplied by the instant node (only 4 image slots)
         r = ondemand.preflight(_audio_blueprint(), schemas())
         self.assertFalse(r["instant_testable"])
+        self.assertIn("AUDIO", r["generic_reason"])
 
 
 class TestSaveBlueprint(unittest.TestCase):
