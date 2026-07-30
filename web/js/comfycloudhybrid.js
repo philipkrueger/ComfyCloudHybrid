@@ -228,11 +228,15 @@ function createGenericNode(report, blueprint) {
     if (w) w.value = report.generic_json;
     node.title = `☁ ${report.name || "Cloud"} (test)`;
     addParamWidgets(node, report.baked_inputs);
-    if (blueprint?.nodes?.length) {
+    // prefer the backend-normalized source (dict links, reconstructed
+    // boundaries + IO bounding) — the raw live payload cannot be fed back
+    // into graph.createSubgraph
+    const srcBp = report.source_blueprint || blueprint;
+    if (srcBp?.nodes?.length) {
         node.properties = node.properties || {};
         node.properties.cchSource = {
-            instance: blueprint.nodes[0],
-            defs: blueprint.definitions?.subgraphs || [],
+            instance: srcBp.nodes[0],
+            defs: srcBp.definitions?.subgraphs || [],
             images: report.image_inputs || [],
         };
     }
@@ -424,9 +428,23 @@ function restoreSubgraph(cloudNode) {
         return;
     }
     const root = app.graph?.rootGraph ?? app.graph;
+    // last-resort patch for sources stored by older builds (raw live defs):
+    // the Subgraph constructor dereferences inputNode/outputNode.bounding
+    const fixIO = (io, id, x) => {
+        const o = (io && typeof io === "object") ? { ...io } : { id };
+        if (o.id == null) o.id = id;
+        if (!Array.isArray(o.bounding)) o.bounding = [x, 0, 120, 80];
+        return o;
+    };
+    const defs = src.defs.map((d) => ({
+        ...d,
+        inputNode: fixIO(d.inputNode, -10, -260),
+        outputNode: fixIO(d.outputNode, -20, 260),
+        widgets: Array.isArray(d.widgets) ? d.widgets : [],
+    }));
     try {
         const registered = [];
-        for (const def of src.defs) {
+        for (const def of defs) {
             const existing = typeof root.subgraphs?.get === "function"
                 ? root.subgraphs.get(def.id) : root.subgraphs?.[def.id];
             if (!existing && typeof root.createSubgraph === "function") {

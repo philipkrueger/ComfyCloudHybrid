@@ -201,6 +201,21 @@ class TestLiveDesktopFormat(unittest.TestCase):
         self.assertEqual([o["type"] for o in r["outputs"]], ["MASK"])
         self.assertEqual([i["name"] for i in r["inputs"]], ["image"])
 
+    def test_source_blueprint_is_canvas_recreatable(self):
+        # the report ships a normalized source the frontend can feed back
+        # into graph.createSubgraph: dict links, boundary arrays, and IO
+        # nodes with a bounding box (the Subgraph constructor reads it)
+        r = ondemand.preflight(_live_ify(load("mask_blueprint.json")), schemas())
+        self.assertTrue(r["ok"], r["errors"])
+        sg = r["source_blueprint"]["definitions"]["subgraphs"][0]
+        self.assertIsInstance(sg["inputs"], list)
+        self.assertIsInstance(sg["outputs"], list)
+        self.assertIsInstance(sg["inputNode"]["bounding"], list)
+        self.assertIsInstance(sg["outputNode"]["bounding"], list)
+        self.assertIsInstance(sg["widgets"], list)
+        for l in sg["links"]:
+            self.assertIsInstance(l, dict)
+
     def test_proxy_widget_inputs_do_not_become_slots(self):
         # instance inputs beyond the highest -10 slot are promoted widgets,
         # not boundary slots — reconstruction must cut them off

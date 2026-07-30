@@ -114,10 +114,21 @@ def _reconstruct_boundaries(bp: dict) -> None:
                      **({"label": o["label"]} if o.get("label") else {}),
                      "type": o.get("type") or "*"}
                     for k, o in enumerate(inst.get("outputs") or [])]
-            if not sg.get("inputNode"):
+            # the frontend's Subgraph constructor reads .bounding off these —
+            # give the IO nodes a sane box so a stored def can be re-created
+            # on the canvas ("Convert back to subgraph")
+            if not isinstance(sg.get("inputNode"), dict):
                 sg["inputNode"] = {"id": -10}
-            if not sg.get("outputNode"):
+            sg["inputNode"].setdefault("id", -10)
+            if not isinstance(sg["inputNode"].get("bounding"), list):
+                sg["inputNode"]["bounding"] = [-260.0, 0.0, 120.0, 80.0]
+            if not isinstance(sg.get("outputNode"), dict):
                 sg["outputNode"] = {"id": -20}
+            sg["outputNode"].setdefault("id", -20)
+            if not isinstance(sg["outputNode"].get("bounding"), list):
+                sg["outputNode"]["bounding"] = [260.0, 0.0, 120.0, 80.0]
+            if not isinstance(sg.get("widgets"), list):
+                sg["widgets"] = []
 
 
 def _dump_debug(blueprint: dict, err_text: str) -> str | None:
@@ -159,7 +170,8 @@ def preflight(blueprint: dict, schemas: SchemaSource) -> dict:
     # every conversion-level failure dumps the exact payload — live-frontend
     # serialisation quirks can only be diagnosed from the real structure
     try:
-        cw = convert(_normalize_blueprint(blueprint), schemas)
+        normalized = _normalize_blueprint(blueprint)
+        cw = convert(normalized, schemas)
     except (BlueprintFormatError, UnsupportedTypeError) as e:
         _dump_debug(blueprint, str(e))
         report["errors"].append(str(e))
@@ -221,6 +233,11 @@ def preflight(blueprint: dict, schemas: SchemaSource) -> dict:
     report["ok"] = not report["errors"]
     if report["ok"]:
         report.update(_to_generic(cw))
+        # blueprint-file-shaped source (dict links, reconstructed boundaries,
+        # IO bounding boxes): the frontend stores this on the instant node so
+        # "Convert back to subgraph" can re-create the definition safely —
+        # the RAW live payload lacks fields the Subgraph constructor needs
+        report["source_blueprint"] = normalized
     return report
 
 
