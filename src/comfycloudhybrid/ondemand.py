@@ -259,7 +259,18 @@ def _to_generic(cw: ConvertedWorkflow) -> dict:
                 continue
             for key, iname in bi.targets:
                 _set_input(prompt, key, iname, bi.default)
-            baked.append({"name": bi.name, "value": bi.default})
+            # enough metadata for the frontend to build an editable widget
+            # that writes changes back into the generic JSON (targets =
+            # [prompt_key, input_name] pairs the value must be written to)
+            entry = {"name": bi.name, "value": bi.default, "type": bi.type,
+                     "targets": [list(t) for t in bi.targets]}
+            if bi.type == "COMBO" and bi.combo_options:
+                entry["options"] = list(bi.combo_options)
+            if bi.minimum is not None:
+                entry["min"] = bi.minimum
+            if bi.maximum is not None:
+                entry["max"] = bi.maximum
+            baked.append(entry)
         else:  # MASK, UPLOAD_COMBO, anything else
             reasons.append(f"input '{bi.name}' ({bi.type}) — the instant node "
                            "only accepts up to four image inputs")

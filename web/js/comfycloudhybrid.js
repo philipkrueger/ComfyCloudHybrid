@@ -124,7 +124,7 @@ function showReportDialog(title, report) {
     section("Errors — node not generated", report.errors, "#f77");
     section("Hints", report.warnings, "#f5b942");
     if (report.baked_inputs?.length) {
-        section("Baked to defaults (not editable on the instant node)",
+        section("Parameters (editable as widgets on the instant node)",
             report.baked_inputs.map((b) => `${b.name} = ${JSON.stringify(b.value)}`),
             "#8bd");
     }
@@ -141,6 +141,52 @@ function showReportDialog(title, report) {
     document.body.appendChild(overlay);
 }
 
+// ---- editable parameter widgets on the instant node -----------------------
+// Every value input of the subgraph becomes a real widget; changes are
+// written straight into workflow_json (the JSON stays the source of truth).
+
+function coerceParam(type, v) {
+    if (type === "INT") return Math.round(Number(v) || 0);
+    if (type === "FLOAT") return Number(v) || 0;
+    if (type === "BOOLEAN") return Boolean(v);
+    return String(v ?? "");
+}
+
+function setJsonParam(node, targets, type, value) {
+    const w = node.widgets?.find((x) => x.name === "workflow_json");
+    if (!w) return;
+    let prompt;
+    try { prompt = JSON.parse(w.value); } catch (e) { return; }
+    for (const [key, input] of targets || []) {
+        if (prompt[key]?.inputs) prompt[key].inputs[input] = coerceParam(type, value);
+    }
+    w.value = JSON.stringify(prompt, null, 2);
+}
+
+function addParamWidgets(node, params) {
+    for (const p of params || []) {
+        if (!p.targets?.length) continue;
+        if (node.widgets?.some((w) => w.name === p.name)) continue;
+        const cb = (v) => setJsonParam(node, p.targets, p.type, v);
+        if (p.type === "BOOLEAN") {
+            node.addWidget("toggle", p.name, Boolean(p.value), cb);
+        } else if (p.type === "INT" || p.type === "FLOAT") {
+            const opts = { precision: p.type === "INT" ? 0 : 3 };
+            if (p.min != null) opts.min = p.min;
+            if (p.max != null) opts.max = p.max;
+            node.addWidget("number", p.name, Number(p.value ?? 0), cb, opts);
+        } else if (p.type === "COMBO" && Array.isArray(p.options) && p.options.length) {
+            node.addWidget("combo", p.name, p.value ?? p.options[0], cb,
+                { values: p.options });
+        } else {
+            node.addWidget("text", p.name, String(p.value ?? ""), cb);
+        }
+    }
+    node.properties = node.properties || {};
+    node.properties.cchParams = params;
+    if (node.computeSize) node.size = node.computeSize();
+}
+
 // Create the pre-filled generic runner node (not yet positioned/wired).
 function createGenericNode(report) {
     const node = LiteGraph.createNode(GENERIC_NODE_TYPE);
@@ -153,6 +199,7 @@ function createGenericNode(report) {
     const w = node.widgets?.find((x) => x.name === "workflow_json");
     if (w) w.value = report.generic_json;
     node.title = `☁ ${report.name || "Cloud"} (test)`;
+    addParamWidgets(node, report.baked_inputs);
     return node;
 }
 
@@ -252,7 +299,7 @@ function showConvertActions(sourceNode, report) {
     };
     addList("Image inputs", (report.image_inputs || []).map(
         (i) => `${i.token} ← ${i.name}`), "#8bd");
-    addList("Baked to defaults", (report.baked_inputs || []).map(
+    addList("Parameters (editable widgets)", (report.baked_inputs || []).map(
         (b) => `${b.name} = ${JSON.stringify(b.value)}`), "#8bd");
     addList("Hints", report.warnings, "#f5b942");
 
@@ -530,6 +577,24 @@ app.registerExtension({
     getNodeMenuItems(node) {
         officialMenuHookActive = true;
         return subgraphMenuItems(node);
+    },
+    // rebuild the dynamic parameter widgets on instant nodes after a graph
+    // reload — the schema only carries the static widgets; the param values
+    // are re-read from workflow_json (the source of truth)
+    loadedGraphNode(node) {
+        if (node?.type !== GENERIC_NODE_TYPE) return;
+        const params = node.properties?.cchParams;
+        if (!Array.isArray(params) || !params.length) return;
+        let prompt = null;
+        const wj = node.widgets?.find((x) => x.name === "workflow_json");
+        try { prompt = wj ? JSON.parse(wj.value) : null; } catch (e) { /* keep saved values */ }
+        for (const p of params) {
+            const t = (p.targets || [])[0];
+            const cur = t && prompt?.[t[0]]?.inputs?.[t[1]];
+            if (cur !== undefined && !Array.isArray(cur)) p.value = cur;
+        }
+        try { addParamWidgets(node, params); }
+        catch (e) { console.warn("[ComfyCloudHybrid] param widgets not restored:", e); }
     },
     async setup() {
         try { installSubgraphMenu(); }

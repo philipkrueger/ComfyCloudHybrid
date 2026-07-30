@@ -43,6 +43,18 @@ class TestPreflightValid(unittest.TestCase):
         names = {b["name"] for b in r["baked_inputs"]}
         self.assertIn("fps", names)
 
+    def test_baked_inputs_carry_widget_metadata(self):
+        # the frontend builds editable widgets from these entries: they must
+        # name the type and the JSON targets the value is written to
+        r = ondemand.preflight(load("video_blueprint.json"), schemas())
+        baked = {b["name"]: b for b in r["baked_inputs"]}
+        fps = baked["fps"]
+        self.assertEqual(fps["type"], "FLOAT")
+        self.assertTrue(fps["targets"], "targets missing")
+        key, iname = fps["targets"][0]
+        prompt = json.loads(r["generic_json"])
+        self.assertEqual(prompt[key]["inputs"][iname], fps["value"])
+
     def test_upload_combo_blocks_instant_but_not_generation(self):
         # change_style carries a fixed LoadImage file (UPLOAD_COMBO) the generic
         # runner cannot upload — valid node, but not instant-testable
