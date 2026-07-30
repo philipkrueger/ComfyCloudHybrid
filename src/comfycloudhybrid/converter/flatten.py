@@ -306,6 +306,10 @@ def convert(blueprint: dict, schemas: SchemaSource, fallback_name: str = "") -> 
             _apply_combo_options(bi, ctx.prompt, schemas)
             if not bi.combo_options:
                 bi.type = "STRING"
+                ctx.warnings.append(
+                    f"Input '{bi.name}' has no cloud option list and became a "
+                    "free text field — its value must exactly match a Comfy "
+                    "Cloud model name")
 
     # -- interior fixed-file uploads ----------------------------------------
     proxied = {(k, i) for bi in proxy_inputs + slot_inputs for (k, i) in bi.targets}

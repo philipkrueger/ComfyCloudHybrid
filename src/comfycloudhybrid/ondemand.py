@@ -21,6 +21,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import re
 import traceback
 
 from . import config
@@ -40,6 +41,9 @@ MAX_GENERIC_IMAGES = len(GENERIC_TOKENS)
 DEBUG_DUMP = config.CACHE_DIR / "convert_debug.json"
 
 _LINK_KEYS = ("id", "origin_id", "origin_slot", "target_id", "target_slot", "type")
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
 
 def _normalize_blueprint(bp: dict) -> dict:
@@ -180,10 +184,23 @@ def preflight(blueprint: dict, schemas: SchemaSource) -> dict:
 
     # 2) hard blockers → the node would be dysfunctional, refuse to generate it
     if cw.missing_classes:
-        report["errors"].append(
-            "These node classes do not exist on Comfy Cloud, so the node could "
-            "not run: " + ", ".join(cw.missing_classes)
-            + ". Replace them with cloud-available nodes inside the subgraph.")
+        # a UUID in missing_classes is not a node class at all — it is a
+        # NESTED subgraph instance whose definition was absent from the
+        # payload (frontend serialisation gap), a very different problem
+        # than a genuinely cloud-unavailable node
+        uuids = [c for c in cw.missing_classes if _UUID_RE.match(c)]
+        real = [c for c in cw.missing_classes if not _UUID_RE.match(c)]
+        if real:
+            report["errors"].append(
+                "These node classes do not exist on Comfy Cloud, so the node "
+                "could not run: " + ", ".join(real)
+                + ". Replace them with cloud-available nodes inside the subgraph.")
+        if uuids:
+            report["errors"].append(
+                "Nested subgraph definition(s) missing from the request payload: "
+                + ", ".join(uuids)
+                + ". This is a serialisation gap, not a cloud limitation — "
+                "update ComfyCloudHybrid (web extension) or report a bug.")
     if not cw.outputs:
         report["errors"].append(
             "The subgraph exposes no transferable output (IMAGE / MASK / VIDEO).")
@@ -198,15 +215,8 @@ def preflight(blueprint: dict, schemas: SchemaSource) -> dict:
         report["warnings"].append(
             "This subgraph uses no AI model — it runs faster and free locally; "
             "cloud offloading only adds latency and GPU cost.")
-    for bi in cw.inputs:
-        # a model-selector COMBO with no resolvable cloud options degrades to a
-        # free-text field (converter sets .type STRING) — the user must type an
-        # exact cloud model name, which is easy to get wrong
-        if bi.type == "STRING" and bi.kind == "slot":
-            report["warnings"].append(
-                f"Input '{bi.name}' has no cloud option list and became a free "
-                "text field — its value must exactly match a Comfy Cloud model "
-                "name.")
+    # (the COMBO→free-text degradation warning comes from the converter
+    # itself now — a genuine STRING input like a prompt must NOT warn)
 
     report["ok"] = not report["errors"]
     if report["ok"]:

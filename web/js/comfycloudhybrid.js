@@ -69,8 +69,33 @@ function isSubgraphNode(node) {
         node.constructor?.name === "SubgraphNode");
 }
 
+// Collect every subgraph definition the live graph knows about. The def of
+// the clicked subgraph alone is not enough: NESTED subgraph instances inside
+// it reference their definitions by UUID, and those live in the root graph's
+// central registry — without them the backend treats the nested instance as
+// an unknown node class.
+function collectSubgraphDefs(rootDef) {
+    const defs = new Map();
+    const push = (d) => { if (d?.id && !defs.has(d.id)) defs.set(d.id, d); };
+    push(rootDef);
+    const graph = app.graph?.rootGraph ?? app.graph;
+    const reg = graph?.subgraphs;
+    if (reg) {
+        const values = typeof reg.values === "function"
+            ? [...reg.values()] : Object.values(reg);
+        for (const sg of values) {
+            try {
+                push(typeof sg.serialize === "function" ? sg.serialize() : sg);
+            } catch (e) {
+                console.warn("[ComfyCloudHybrid] skipping unserializable subgraph def:", e);
+            }
+        }
+    }
+    return [...defs.values()];
+}
+
 // Wrap a canvas subgraph instance into the blueprint shape the backend
-// converter expects: { nodes:[instance], definitions:{subgraphs:[def]} }.
+// converter expects: { nodes:[instance], definitions:{subgraphs:[defs…]} }.
 function subgraphToBlueprint(node) {
     const sub = node.subgraph;
     if (!sub) throw new Error("This node is not a subgraph.");
@@ -85,7 +110,7 @@ function subgraphToBlueprint(node) {
         version: 0.4,
         nodes: [instance],
         links: [],
-        definitions: { subgraphs: [def] },
+        definitions: { subgraphs: collectSubgraphDefs(def) },
         extra: {},
     };
 }

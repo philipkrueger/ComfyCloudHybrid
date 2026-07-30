@@ -75,6 +75,24 @@ class TestPreflightBlocks(unittest.TestCase):
         self.assertIn("TotallyUnknownNode", r["missing_classes"])
         self.assertTrue(any("could not run" in e for e in r["errors"]))
 
+    def test_missing_nested_def_reported_as_serialisation_gap(self):
+        # a UUID "class" is a nested subgraph instance whose definition was
+        # not sent along — the error must say that, not "not on Comfy Cloud"
+        bp = load("mask_blueprint.json")
+        bp["definitions"]["subgraphs"][0]["nodes"][0]["type"] = \
+            "f72dc44d-2694-42d5-af1f-e477b187d462"
+        r = ondemand.preflight(bp, schemas())
+        self.assertFalse(r["ok"])
+        self.assertTrue(any("Nested subgraph definition" in e for e in r["errors"]),
+                        r["errors"])
+        self.assertFalse(any("do not exist on Comfy Cloud" in e for e in r["errors"]))
+
+    def test_plain_string_input_gets_no_model_name_warning(self):
+        # the free-text warning is for degraded COMBO model selectors only —
+        # a genuine STRING input (a prompt) must not warn
+        r = ondemand.preflight(load("mask_blueprint.json"), schemas())
+        self.assertFalse(any("free text field" in w for w in r["warnings"]))
+
     def test_unsupported_boundary_type_is_an_error(self):
         bp = load("mask_blueprint.json")
         bp["definitions"]["subgraphs"][0]["inputs"][0]["type"] = "LATENT"
