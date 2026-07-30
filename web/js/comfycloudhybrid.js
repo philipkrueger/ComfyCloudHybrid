@@ -457,7 +457,13 @@ function restoreSubgraph(cloudNode) {
         if (!inst) throw new Error(
             "subgraph definition could not be re-registered in this workflow");
         app.graph.add(inst);
-        inst.configure({ ...src.instance, id: -1 });
+        // strip the stored link state: those ids reference links/nodes from
+        // BEFORE the conversion and dangle in today's graph — queueing would
+        // fail with "Node [<id>] not found". Real wires are re-made below.
+        const instData = { ...src.instance, id: -1 };
+        instData.inputs = (instData.inputs || []).map((s) => ({ ...s, link: null }));
+        instData.outputs = (instData.outputs || []).map((s) => ({ ...s, links: [] }));
+        inst.configure(instData);
         inst.pos = [...cloudNode.pos];
 
         // images back onto the boundary inputs (by stored mapping name)
