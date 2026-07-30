@@ -457,14 +457,23 @@ function restoreSubgraph(cloudNode) {
         if (!inst) throw new Error(
             "subgraph definition could not be re-registered in this workflow");
         app.graph.add(inst);
-        // strip the stored link state: those ids reference links/nodes from
-        // BEFORE the conversion and dangle in today's graph — queueing would
-        // fail with "Node [<id>] not found". Real wires are re-made below.
-        const instData = { ...src.instance, id: -1 };
+        // strip the stored link state (ids from BEFORE the conversion dangle
+        // in today's graph) and the stored node id — the id graph.add() just
+        // assigned must survive configure, or the frontend's render layer
+        // (keyed by valid unique ids) never shows the node
+        const instData = { ...src.instance };
+        delete instData.id;
         instData.inputs = (instData.inputs || []).map((s) => ({ ...s, link: null }));
         instData.outputs = (instData.outputs || []).map((s) => ({ ...s, links: [] }));
         inst.configure(instData);
         inst.pos = [...cloudNode.pos];
+        // never trade the cloud node for a node the graph did not accept
+        if (!app.graph.getNodeById(inst.id)) {
+            throw new Error("restored subgraph did not register in the graph "
+                + `(id ${inst.id})`);
+        }
+        console.log("[ComfyCloudHybrid] restored subgraph:",
+            { id: inst.id, type: inst.type, pos: inst.pos, size: inst.size });
 
         // images back onto the boundary inputs (by stored mapping name)
         (src.images || []).forEach((map, i) => {
