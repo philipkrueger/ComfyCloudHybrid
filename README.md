@@ -90,6 +90,11 @@ Right-click any **subgraph** on the canvas → two entries:
   `saved_blueprints/` and, after a ComfyUI restart, registers it as a proper
   named cloud node with all its inputs (the full-fidelity path; the instant
   node only carries up to four image inputs).
+- **⟲ Convert back to subgraph** — right-click an instant test node to undo
+  the conversion: the original subgraph (stored inside the node) is rebuilt
+  in place, image and IMAGE-output links are rewired, definitions are
+  re-registered if the Replace removed them. Parameters edited on the test
+  node are not carried back.
 
 Both run a **preflight**: a subgraph that would produce a dysfunctional node is
 never generated. Instead you get a report separating **errors** (blockers, e.g.

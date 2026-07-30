@@ -213,7 +213,10 @@ function addParamWidgets(node, params) {
 }
 
 // Create the pre-filled generic runner node (not yet positioned/wired).
-function createGenericNode(report) {
+// The original subgraph payload is stashed in the node's properties so the
+// process can be reversed later ("Convert back to subgraph") — even after
+// a Replace removed the subgraph from the canvas.
+function createGenericNode(report, blueprint) {
     const node = LiteGraph.createNode(GENERIC_NODE_TYPE);
     if (!node) {
         toast("error", "Comfy Cloud",
@@ -225,6 +228,14 @@ function createGenericNode(report) {
     if (w) w.value = report.generic_json;
     node.title = `☁ ${report.name || "Cloud"} (test)`;
     addParamWidgets(node, report.baked_inputs);
+    if (blueprint?.nodes?.length) {
+        node.properties = node.properties || {};
+        node.properties.cchSource = {
+            instance: blueprint.nodes[0],
+            defs: blueprint.definitions?.subgraphs || [],
+            images: report.image_inputs || [],
+        };
+    }
     return node;
 }
 
@@ -235,8 +246,8 @@ function getLink(id) {
 }
 
 // Insert next to the source subgraph, keep the subgraph untouched.
-function insertGenericNode(sourceNode, report) {
-    const node = createGenericNode(report);
+function insertGenericNode(sourceNode, report, blueprint) {
+    const node = createGenericNode(report, blueprint);
     if (!node) return;
     if (sourceNode?.pos) node.pos = [sourceNode.pos[0], sourceNode.pos[1] + 160];
     app.graph.setDirtyCanvas(true, true);
@@ -249,8 +260,8 @@ function insertGenericNode(sourceNode, report) {
 // Swap the subgraph for the generic node: rewire incoming image links to
 // image_1…N (by boundary-input name), move IMAGE-output links onto the
 // generic node's single IMAGE output, then remove the subgraph.
-function replaceWithGenericNode(sourceNode, report) {
-    const node = createGenericNode(report);
+function replaceWithGenericNode(sourceNode, report, blueprint) {
+    const node = createGenericNode(report, blueprint);
     if (!node) return;
     const skipped = [];
     try {
@@ -293,7 +304,7 @@ function replaceWithGenericNode(sourceNode, report) {
 }
 
 // Success banner: Insert / Replace / Cancel + mapping info and hints.
-function showConvertActions(sourceNode, report) {
+function showConvertActions(sourceNode, report, blueprint) {
     const overlay = document.createElement("div");
     overlay.style.cssText =
         "position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:3000;" +
@@ -342,8 +353,8 @@ function showConvertActions(sourceNode, report) {
         return b;
     };
     row.append(
-        mkBtn("Replace subgraph", true, () => replaceWithGenericNode(sourceNode, report)),
-        mkBtn("Insert next to it", false, () => insertGenericNode(sourceNode, report)),
+        mkBtn("Replace subgraph", true, () => replaceWithGenericNode(sourceNode, report, blueprint)),
+        mkBtn("Insert next to it", false, () => insertGenericNode(sourceNode, report, blueprint)),
         mkBtn("Cancel", false, null));
     box.appendChild(row);
     overlay.appendChild(box);
@@ -391,7 +402,7 @@ async function convertSubgraph(node, mode) {
 
     // mode === "test"
     if (report.instant_testable) {
-        showConvertActions(node, report);
+        showConvertActions(node, report, blueprint);
     } else {
         toast("warn", "Comfy Cloud",
             `“${report.name}” can't run on the instant node (${report.generic_reason}). ` +
@@ -400,16 +411,90 @@ async function convertSubgraph(node, mode) {
     }
 }
 
-// The two context-menu entries for subgraph nodes.
+// Reverse of the conversion: rebuild the original subgraph from the payload
+// stored on the instant node, re-register its definitions if the workflow
+// lost them (mirrors the frontend's own clipboard-paste flow:
+// graph.createSubgraph(def) → configure → LiteGraph.createNode(uuid)).
+function restoreSubgraph(cloudNode) {
+    const src = cloudNode.properties?.cchSource;
+    if (!src?.instance?.type || !src?.defs?.length) {
+        toast("error", "Comfy Cloud",
+            "This node carries no stored subgraph source — only nodes created "
+            + "by a newer “Convert (test)” can be converted back.");
+        return;
+    }
+    const root = app.graph?.rootGraph ?? app.graph;
+    try {
+        const registered = [];
+        for (const def of src.defs) {
+            const existing = typeof root.subgraphs?.get === "function"
+                ? root.subgraphs.get(def.id) : root.subgraphs?.[def.id];
+            if (!existing && typeof root.createSubgraph === "function") {
+                registered.push([root.createSubgraph(def), def]);
+            }
+        }
+        for (const [sg, def] of registered) sg?.configure?.(def);
+
+        const inst = LiteGraph.createNode(src.instance.type);
+        if (!inst) throw new Error(
+            "subgraph definition could not be re-registered in this workflow");
+        app.graph.add(inst);
+        inst.configure({ ...src.instance, id: -1 });
+        inst.pos = [...cloudNode.pos];
+
+        // images back onto the boundary inputs (by stored mapping name)
+        (src.images || []).forEach((map, i) => {
+            const cIdx = (cloudNode.inputs || []).findIndex(
+                (x) => x.name === `image_${i + 1}`);
+            const linkId = cIdx >= 0 ? cloudNode.inputs[cIdx].link : null;
+            const link = getLink(linkId);
+            const origin = link && app.graph.getNodeById(link.origin_id);
+            const dIdx = (inst.inputs || []).findIndex(
+                (x) => x.label === map.name || x.name === map.name);
+            if (origin && dIdx >= 0) origin.connect(link.origin_slot, inst, dIdx);
+        });
+        // IMAGE-output links back onto the subgraph's first IMAGE output
+        const outIdx = (inst.outputs || []).findIndex((o) => o.type === "IMAGE");
+        const clOut = (cloudNode.outputs || [])[0];
+        if (outIdx >= 0 && clOut) {
+            for (const lid of [...(clOut.links || [])]) {
+                const link = getLink(lid);
+                const target = link && app.graph.getNodeById(link.target_id);
+                if (target) inst.connect(outIdx, target, link.target_slot);
+            }
+        }
+        app.graph.remove(cloudNode);
+        app.graph.setDirtyCanvas(true, true);
+        toast("success", "Comfy Cloud",
+            `Subgraph “${inst.title || src.instance.type}” restored. Note: `
+            + "parameters edited on the test node are not carried back — the "
+            + "subgraph returns with its values from conversion time.");
+    } catch (e) {
+        console.warn("[ComfyCloudHybrid] restore failed:", e);
+        toast("error", "Comfy Cloud",
+            `Could not restore the subgraph: ${e.message || e}. The cloud node `
+            + "was left untouched.");
+    }
+}
+
+// The context-menu entries: convert on subgraphs, restore on instant nodes.
 function subgraphMenuItems(node) {
-    if (!isSubgraphNode(node)) return [];
-    return [null, {
-        content: "☁ Convert to Cloud API Node (test)",
-        callback: () => convertSubgraph(node, "test"),
-    }, {
-        content: "☁ Save as Cloud Node (permanent)",
-        callback: () => convertSubgraph(node, "save"),
-    }];
+    if (isSubgraphNode(node)) {
+        return [null, {
+            content: "☁ Convert to Cloud API Node (test)",
+            callback: () => convertSubgraph(node, "test"),
+        }, {
+            content: "☁ Save as Cloud Node (permanent)",
+            callback: () => convertSubgraph(node, "save"),
+        }];
+    }
+    if (node?.type === GENERIC_NODE_TYPE && node.properties?.cchSource) {
+        return [null, {
+            content: "⟲ Convert back to subgraph",
+            callback: () => restoreSubgraph(node),
+        }];
+    }
+    return [];
 }
 
 // Frontend ≥1.47 invokes the official extension hook getNodeMenuItems (see
