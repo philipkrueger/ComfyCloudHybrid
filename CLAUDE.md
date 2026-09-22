@@ -27,6 +27,9 @@ ausgeführt — Inputs hochladen, Job pollen, Bilder zurückladen.
 - Kuratierte Blueprints syncen: `python scripts/sync_blueprints.py`
 - Dev-Install: `ln -s "$(pwd)" <ComfyUI>/custom_nodes/ComfyCloudHybrid`
 - Lokales ComfyUI: Port 8000 (`<ComfyUI>/run.sh`)
+- ComfyUI-Versionsdrift (Pin vs. Release vs. lokal): `python3 scripts/comfy_versions.py`
+- Kompat-Check gegen echten Checkout (offline, Cloud gemockt):
+  `<Checkout>/.venv/bin/python scripts/check_comfyui.py <Checkout>` — Ablauf: Skill `/comfy-compat`
 
 ## Harte Regeln
 
@@ -40,6 +43,8 @@ ausgeführt — Inputs hochladen, Job pollen, Bilder zurückladen.
 - Cloud-Aufrufe kosten echte Credits — für Entwicklung die gemockten Tests nutzen;
   Live-Tests nur bewusst (Skill `/test-cloud`).
 - V3-only: keine `NODE_CLASS_MAPPINGS` exportieren (würde `comfy_entrypoint` verdrängen).
+- Kompat-Pins gehören zusammen: `.github/workflows/tests.yml` (`ref:`) und die
+  README-Zeile „Compatibility checked on …" — nie nur eine davon ändern.
 
 ## Bekannte Grenzen
 
