@@ -122,7 +122,8 @@ def convert(blueprint: dict, schemas: SchemaSource, fallback_name: str = "") -> 
 
     # -- boundary inputs -> BoundInputs ------------------------------------
     slot_inputs: list[BoundInput] = []
-    for slot in root_def.get("inputs") or []:
+    instance_values = _instance_widget_values(inst)
+    for slot_index, slot in enumerate(root_def.get("inputs") or []):
         typ = slot.get("type", "*")
         raw_label = slot.get("label") or slot.get("name") or "input"
         disp = _clean_label(raw_label)
@@ -150,7 +151,8 @@ def convert(blueprint: dict, schemas: SchemaSource, fallback_name: str = "") -> 
             bi_type = parts[0]
         slot_inputs.append(BoundInput(
             name=disp, safe_id=sanitize_id(disp, ctx.taken_ids),
-            type=bi_type, kind="slot", optional=label_optional))
+            type=bi_type, kind="slot", optional=label_optional,
+            default=instance_values.get(slot_index)))
 
     def resolve_root_boundary(k: int):
         if 0 <= k < len(slot_inputs):
@@ -193,7 +195,7 @@ def convert(blueprint: dict, schemas: SchemaSource, fallback_name: str = "") -> 
             ctx.warnings.append(f"Output '{disp}' hängt an nicht ausführbarem "
                                 f"Node '{res[1].get('type')}'")
             continue
-        if res[0] != "link":
+        if res[0] != "link" and not (res[0] == "value" and typ in VALUE_OUTPUT_TYPES):
             ctx.warnings.append(f"Output '{disp}' is not connected to an executable "
                                 "node and is skipped")
             continue
@@ -302,6 +304,11 @@ def convert(blueprint: dict, schemas: SchemaSource, fallback_name: str = "") -> 
     # as a dropdown instead of a copy-the-exact-name text field. Without a
     # cloud catalog (cold start) the slot degrades to free-text STRING.
     for bi in slot_inputs:
+        if bi.type in VALUE_TYPES and bi.targets and all(
+            UPLOAD_CLASSES.get(ctx.prompt[k]["class_type"]) == i
+            for k, i in bi.targets
+        ):
+            bi.type = "UPLOAD_COMBO"
         if bi.type == "COMBO" and bi.combo_options is None:
             _apply_combo_options(bi, ctx.prompt, schemas)
             if not bi.combo_options:
@@ -352,12 +359,44 @@ def _expand(defn: dict, prefix: str, resolve_boundary, ctx: _Ctx,
     def is_stripped(n) -> bool:
         return n.get("mode") in _STRIPPED_MODES or not schemas.known(n.get("type", ""))
 
-    def resolve_origin(origin_id, origin_slot, _seen=None):
+    def resolve_origin(origin_id, origin_slot, _seen=None, target_type=None):
         if origin_id == -10:
             return resolve_boundary(origin_slot)
         node = nodes_by_id.get(origin_id)
         if node is None:
             return ("none", None)
+        if node.get("mode") == 2:
+            return ("none", None)
+        if node.get("mode") == 4:
+            seen = set(_seen or ())
+            marker = (origin_id, origin_slot)
+            if marker in seen:
+                raise BlueprintFormatError("Cycle while resolving bypassed nodes")
+            seen.add(marker)
+            inputs = node.get("inputs") or []
+            outputs = node.get("outputs") or []
+            output_type = (outputs[origin_slot].get("type", "*")
+                           if origin_slot < len(outputs) else "*")
+            target_type = target_type or output_type
+            # Match the frontend: prefer the opposite input, then an exact
+            # target type, then the first compatible input. Bypassed classes
+            # need not exist on the execution server at all.
+            if target_type in ("*", ""):
+                idx = origin_slot if origin_slot < len(inputs) else 0
+            else:
+                compatible = [i for i, inp in enumerate(inputs)
+                              if _types_match(inp.get("type", "*"), output_type)
+                              and _types_match(inp.get("type", "*"), target_type)]
+                exact = [i for i, inp in enumerate(inputs) if inp.get("type") == target_type]
+                idx = (origin_slot if origin_slot in compatible else
+                       next(iter(exact or compatible), -1))
+            link = link_by_id.get(inputs[idx].get("link")) if 0 <= idx < len(inputs) else None
+            if link is None:
+                return ("none", None)
+            return resolve_origin(link["origin_id"], link["origin_slot"], seen, target_type)
+        if node.get("type") == "PrimitiveNode":
+            values = node.get("widgets_values") or []
+            return ("value", values[0]) if values else ("none", None)
         # Reroute and similar are pure pass-through nodes the cloud doesn't
         # expose — collapse them by following their (single) input upstream
         if node.get("type") in PASSTHROUGH_CLASSES:
@@ -368,7 +407,7 @@ def _expand(defn: dict, prefix: str, resolve_boundary, ctx: _Ctx,
             for inp in node.get("inputs") or []:
                 link = link_by_id.get(inp.get("link"))
                 if link is not None:
-                    return resolve_origin(link["origin_id"], link["origin_slot"], seen)
+                    return resolve_origin(link["origin_id"], link["origin_slot"], seen, target_type)
             return ("none", None)
         if is_instance(node):
             return expand_instance(node).get(origin_slot, ("none", None))
@@ -383,8 +422,12 @@ def _expand(defn: dict, prefix: str, resolve_boundary, ctx: _Ctx,
         link_id = inputs[slot_index].get("link")
         link = link_by_id.get(link_id) if link_id is not None else None
         if link is None:
+            value = _instance_widget_values(node).get(slot_index)
+            if value is not None:
+                return ("value", value)
             return ("none", None)
-        return resolve_origin(link["origin_id"], link["origin_slot"])
+        return resolve_origin(link["origin_id"], link["origin_slot"],
+                              target_type=inputs[slot_index].get("type"))
 
     def expand_instance(inst_node) -> dict:
         nid = inst_node["id"]
@@ -403,7 +446,7 @@ def _expand(defn: dict, prefix: str, resolve_boundary, ctx: _Ctx,
     for n in defn.get("nodes") or []:
         if is_instance(n):
             continue
-        if n.get("type") in PASSTHROUGH_CLASSES:
+        if n.get("type") in PASSTHROUGH_CLASSES or n.get("type") == "PrimitiveNode":
             continue  # collapsed via resolve_origin, never emitted
         if is_stripped(n):
             if n.get("mode") not in _STRIPPED_MODES:
@@ -418,9 +461,12 @@ def _expand(defn: dict, prefix: str, resolve_boundary, ctx: _Ctx,
             link = link_by_id.get(link_id) if link_id is not None else None
             if link is None:
                 continue
-            kind, val = resolve_origin(link["origin_id"], link["origin_slot"])
+            kind, val = resolve_origin(link["origin_id"], link["origin_slot"],
+                                       target_type=inp.get("type"))
             iname = inp.get("name")
             if kind == "link":
+                inputs[iname] = val
+            elif kind == "value":
                 inputs[iname] = val
             elif kind == "bound":
                 val.targets.append((key, iname))
@@ -454,12 +500,36 @@ def _expand(defn: dict, prefix: str, resolve_boundary, ctx: _Ctx,
     for link in defn.get("links") or []:
         if link.get("target_id") == -20:
             omap[link.get("target_slot", 0)] = resolve_origin(
-                link["origin_id"], link["origin_slot"])
+                link["origin_id"], link["origin_slot"], target_type=link.get("type"))
     return omap
 
 
 _PSEUDO_WIDGET_PREFIX = "$$"
 _CONTROL_WIDGETS = {"control_after_generate"}
+
+
+def _types_match(left, right) -> bool:
+    left = {part.strip() for part in str(left).upper().split(",")}
+    right = {part.strip() for part in str(right).upper().split(",")}
+    return bool(left & right) or bool({"*", ""} & (left | right))
+
+
+def _instance_widget_values(instance: dict) -> dict[int, object]:
+    """Frontend 1.51 serializes promoted values in widget-input order.
+
+    Each subgraph instance owns its values; the shared inner definition can
+    still contain the original defaults. IMAGE inputs consume no value, and
+    these modern host values contain no seed-control or upload-button slots.
+    Legacy proxyWidgets-only instances keep using the legacy path below.
+    """
+    values = instance.get("widgets_values") or []
+    slots = [(i, slot) for i, slot in enumerate(instance.get("inputs") or [])
+             if isinstance(slot.get("widget"), dict)]
+    if isinstance(values, dict):
+        return {i: values[slot["name"]] for i, slot in slots
+                if slot.get("name") in values}
+    return {i: value for (i, _), value in zip(slots, values)}
+
 
 # cloud max for a seed-like INT (2^64-1); some cloud INT specs use it
 _UINT64_MAX = 18446744073709551615

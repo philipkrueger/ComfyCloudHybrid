@@ -15,6 +15,19 @@ own subgraphs.
 - API key from the [Comfy Dev Platform](https://platform.comfy.org/profile/api-keys)
   (Profile → API Keys → New; the key is shown **only once** — copy it right away)
 
+Compatibility checked on **ComfyUI v0.37.0 / frontend 1.52.7** (2026-09-22),
+using Python 3.12 and the release's dependencies. Version 0.1.1 preserves the
+current frontend's per-instance promoted widget values (including nested
+subgraphs), handles core VIDEO history results, cancels cloud jobs on async
+task cancellation, and isolates invalid blueprint schemas during registration.
+Conversion and restoration inside a nested graph use that graph's connections.
+Bypassed nodes forward their matching input, and virtual Primitive nodes supply
+their saved value without requiring a corresponding cloud node class.
+
+The checks cover node loading, schema serialization, ComfyUI's V3 async
+execution with mocked cloud calls, media transfer tests, and frontend graph
+logic. Live cloud rendering and visual browser interaction are separate checks.
+
 ## Installation
 
 ```bash
@@ -136,9 +149,31 @@ nodes apply — models referenced inside the subgraph must exist on Comfy Cloud.
 ## Development
 
 ```bash
+# Standalone test environment (or use ComfyUI's existing Python):
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[test]'
+
 # Offline tests (no network, no credits):
 python -m unittest discover tests
+node --test tests/js/*.test.mjs
+
+# Against a real ComfyUI checkout, using its Python/dependencies:
+<ComfyUI>/.venv/bin/python scripts/check_comfyui.py <ComfyUI> --report compatibility.json
 ```
+
+The compatibility check uses CPU mode, temporary configuration/cache files and
+mocked cloud execution. It verifies the actual custom-node loader, all
+convertible blueprint schemas and V3 execution (including hidden node IDs).
+It reports unsupported boundaries and missing local node classes separately;
+the cloud catalog remains authoritative for availability on Comfy Cloud.
+VIDEO **inputs**, dynamic-combo boundaries and 3D/model data are not currently
+transferable. Those blueprints are skipped with a reason.
+
+GitHub Actions runs the offline tests on Python 3.12/3.13 and the ComfyUI smoke
+check against v0.37.0. `python3 scripts/comfy_versions.py` reports drift between the
+pinned, latest-released and locally installed ComfyUI versions; the `/comfy-compat`
+skill walks through re-checking and updating the pins.
 
 Architecture and rules: see [CLAUDE.md](CLAUDE.md).
 

@@ -146,12 +146,14 @@ def map_widgets(node_or_class, widgets_values=None, schema_entry: dict | None = 
         # node's inputs array and from what the cloud expects
         has_control = (opts.get("control_after_generate")
                        or name in SEED_NAMES or name.endswith("seed"))
-        if has_control and i < total and widgets_values[i] in CONTROL_VALUES:
+        if (has_control and i < total and isinstance(widgets_values[i], str)
+                and widgets_values[i] in CONTROL_VALUES):
             i += 1
         # upload-button slot after image-upload combos
         elif ((opts.get("image_upload") or opts.get("upload")
                or name == UPLOAD_HINT_NAME)
-              and i < total and widgets_values[i] in UPLOAD_BUTTON_VALUES):
+              and i < total and isinstance(widgets_values[i], str)
+              and widgets_values[i] in UPLOAD_BUTTON_VALUES):
             i += 1
     # Trailing extras are expected when the node's inputs array drives the
     # mapping: dynamic/composite widgets (crop_region, custom combos) serialize

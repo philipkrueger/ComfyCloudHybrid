@@ -13,6 +13,8 @@ import hashlib
 import io as _io
 import json
 import logging
+from contextlib import suppress
+from pathlib import PurePosixPath
 
 from . import cache, config
 from .cloud_client import CloudError, ComfyCloudClient
@@ -249,6 +251,29 @@ async def upload_cached(client: ComfyCloudClient, data: bytes, filename: str) ->
     return name
 
 
+async def _wait_for_job(client, job_id, *, poll, timeout, queue_timeout, node_id):
+    reporter = _ProgressReporter(node_id)
+    ws_task = asyncio.create_task(client.listen_progress(job_id, reporter.on_ws))
+    try:
+        detail = await client.wait_for_job(
+            job_id, poll_interval=poll, timeout=timeout,
+            queue_timeout=queue_timeout, on_tick=reporter.on_tick,
+            check_interrupted=_check_interrupted)
+    except CloudError:
+        raise
+    except (asyncio.CancelledError, Exception):
+        # CancelledError is a BaseException on supported Python versions;
+        # catching Exception alone leaves the paid cloud job running.
+        await client.interrupt(job_id)
+        raise
+    finally:
+        ws_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await ws_task
+    reporter.done(ComfyCloudClient.gpu_seconds(detail))
+    return detail
+
+
 # -- main pipeline ------------------------------------------------------------
 
 async def run(converted: ConvertedWorkflow, bound_values: dict,
@@ -277,24 +302,9 @@ async def run(converted: ConvertedWorkflow, bound_values: dict,
         job_id = await client.submit(prompt, extra_data={"api_key_comfy_org": api_key})
         log.info("cloud job submitted: %s (%s)", job_id, converted.name)
 
-        reporter = _ProgressReporter(node_id)
-        ws_task = asyncio.create_task(
-            client.listen_progress(job_id, reporter.on_ws))
-        try:
-            detail = await client.wait_for_job(
-                job_id, poll_interval=poll, timeout=timeout,
-                queue_timeout=queue_timeout,
-                on_tick=reporter.on_tick, check_interrupted=_check_interrupted)
-        except CloudError:
-            raise
-        except Exception:
-            # local interrupt or cancellation — stop paying for the cloud job
-            await client.interrupt(job_id)
-            raise
-        finally:
-            ws_task.cancel()
-
-        reporter.done(ComfyCloudClient.gpu_seconds(detail))
+        detail = await _wait_for_job(
+            client, job_id, poll=poll, timeout=timeout,
+            queue_timeout=queue_timeout, node_id=node_id)
         return await _collect_outputs(client, converted, detail)
 
 
@@ -514,7 +524,7 @@ async def run_raw_prompt(prompt: dict, image_tokens: dict[str, "object"],
     """Generic runner: execute an arbitrary API-format prompt. image_tokens
     maps token strings (e.g. %CCH_IMAGE_1%) to IMAGE tensors; every prompt
     input whose value equals a token is replaced by an uploaded LoadImage.
-    Returns a single IMAGE batch of all image outputs."""
+    Returns IMAGE batch, first VIDEO, first AUDIO, and combined preview text."""
     api_key = config.get_api_key()
     if not api_key:
         raise CloudError("No Comfy Cloud API key configured. "
@@ -547,22 +557,9 @@ async def run_raw_prompt(prompt: dict, image_tokens: dict[str, "object"],
         job_id = await client.submit(prompt, extra_data={"api_key_comfy_org": api_key})
         log.info("cloud job submitted: %s (generic)", job_id)
 
-        reporter = _ProgressReporter(node_id)
-        ws_task = asyncio.create_task(
-            client.listen_progress(job_id, reporter.on_ws))
-        try:
-            detail = await client.wait_for_job(
-                job_id, poll_interval=poll, timeout=timeout,
-                queue_timeout=float(config.get("queue_timeout_s")),
-                on_tick=reporter.on_tick, check_interrupted=_check_interrupted)
-        except CloudError:
-            raise
-        except Exception:
-            await client.interrupt(job_id)
-            raise
-        finally:
-            ws_task.cancel()
-        reporter.done(ComfyCloudClient.gpu_seconds(detail))
+        detail = await _wait_for_job(
+            client, job_id, poll=poll, timeout=timeout,
+            queue_timeout=float(config.get("queue_timeout_s")), node_id=node_id)
 
         # collect EVERY transferable result kind — the converter emits
         # SaveImage/SaveVideo/SaveAudio/PreviewAny sinks, and a hand-pasted
@@ -575,12 +572,23 @@ async def run_raw_prompt(prompt: dict, image_tokens: dict[str, "object"],
         for node_out in (detail.get("outputs") or {}).values():
             found_keys.update(k for k, v in node_out.items() if v)
             for im in node_out.get("images") or []:
-                if im.get("type") != "output":
+                # Core SaveVideo uses ui.PreviewVideo: {images: [...],
+                # animated: [true]}. The history key alone is not a media type.
+                suffix = PurePosixPath(im.get("filename", "").lower()).suffix
+                is_video = suffix in {".mp4", ".webm", ".mkv", ".mov", ".avi", ".m4v"}
+                animated = node_out.get("animated")
+                if isinstance(animated, (list, tuple)):
+                    animated = any(animated)
+                is_video = is_video or (bool(animated) and suffix in {".gif", ".webp"})
+                if is_video and video is not None:
                     continue
                 data = await client.download_output(
                     filename=im.get("filename", ""),
-                    subfolder=im.get("subfolder", ""), type="output")
-                tensors.append(png_bytes_to_tensor(data))
+                    subfolder=im.get("subfolder", ""), type=im.get("type", "output"))
+                if is_video:
+                    video = _bytes_to_video(data)
+                else:
+                    tensors.append(png_bytes_to_tensor(data))
             if video is None:
                 for key in ("video", "videos", "gifs"):
                     files = node_out.get(key) or []

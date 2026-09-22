@@ -81,6 +81,18 @@ class TestWidgetMapping(unittest.TestCase):
             out = map_widgets(node, schema_entry=schema)
         self.assertEqual(out["crop_region"], {"x": 0, "y": 0, "width": 512, "height": 512})
 
+    def test_structured_value_after_seed_or_upload(self):
+        for name in ("seed", "image"):
+            with self.subTest(name=name):
+                region = {"x": 1, "y": 2, "width": 64, "height": 64}
+                node = {
+                    "type": "Composite",
+                    "inputs": [{"name": n, "widget": {"name": n}}
+                               for n in (name, "crop_region")],
+                    "widgets_values": [42 if name == "seed" else "in.png", region],
+                }
+                self.assertEqual(map_widgets(node)["crop_region"], region)
+
 
 if __name__ == "__main__":
     unittest.main()

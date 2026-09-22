@@ -40,7 +40,11 @@ class CloudHybridExtension(ComfyExtension):
                     log.info("blueprint %s skipped (missing in cloud: %s)",
                              bp.name, ", ".join(cw.missing_classes))
                     continue
-                node_classes.append(make_blueprint_node(bp, cw))
+                node_class = make_blueprint_node(bp, cw)
+                # ComfyUI validates schemas after get_node_list returns. Do it
+                # here too so one invalid blueprint cannot abort the pack.
+                node_class.GET_SCHEMA()
+                node_classes.append(node_class)
                 routes.KNOWN_SLUGS.add(bp.slug)
             except Exception as e:
                 log.warning("blueprint %s (%s) skipped: %s", bp.name, bp.path, e)

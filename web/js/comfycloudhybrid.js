@@ -52,10 +52,8 @@ function openApiKeyPage() {
 // ---------------------------------------------------------------------------
 // Right-click "Convert to Cloud API Node"
 //
-// NOTE: the subgraph-serialisation and node-creation calls below use the live
-// ComfyUI / LiteGraph frontend API, which cannot be exercised in the offline
-// test suite. The backend (/cloudhybrid/convert) is fully tested; this glue is
-// defensive and may need small tweaks against a specific ComfyUI version.
+// Uses the ComfyUI / LiteGraph frontend API. Offline graph-contract tests
+// cover insertion and rewiring; visual interaction still needs a browser.
 // ---------------------------------------------------------------------------
 
 const GENERIC_NODE_TYPE = "CloudHybrid_RunWorkflow";
@@ -216,14 +214,14 @@ function addParamWidgets(node, params) {
 // The original subgraph payload is stashed in the node's properties so the
 // process can be reversed later ("Convert back to subgraph") — even after
 // a Replace removed the subgraph from the canvas.
-function createGenericNode(report, blueprint) {
+function createGenericNode(report, blueprint, graph) {
     const node = LiteGraph.createNode(GENERIC_NODE_TYPE);
     if (!node) {
         toast("error", "Comfy Cloud",
             "Generic runner node not found — restart ComfyUI so the pack loads.");
         return null;
     }
-    app.graph.add(node);
+    graph.add(node);
     const w = node.widgets?.find((x) => x.name === "workflow_json");
     if (w) w.value = report.generic_json;
     node.title = `☁ ${report.name || "Cloud"} (test)`;
@@ -243,18 +241,20 @@ function createGenericNode(report, blueprint) {
     return node;
 }
 
-function getLink(id) {
-    const links = app.graph.links;
+function getLink(graph, id) {
+    const links = graph.links;
     if (!links || id == null) return null;
     return typeof links.get === "function" ? links.get(id) : links[id];
 }
 
 // Insert next to the source subgraph, keep the subgraph untouched.
 function insertGenericNode(sourceNode, report, blueprint) {
-    const node = createGenericNode(report, blueprint);
+    const graph = sourceNode.graph;
+    if (!graph) return;
+    const node = createGenericNode(report, blueprint, graph);
     if (!node) return;
     if (sourceNode?.pos) node.pos = [sourceNode.pos[0], sourceNode.pos[1] + 160];
-    app.graph.setDirtyCanvas(true, true);
+    graph.setDirtyCanvas(true, true);
     const imgs = (report.image_inputs || []).map((i) => `${i.token} ← ${i.name}`).join(", ");
     toast("success", "Comfy Cloud",
         `Instant node created for “${report.name}”.` +
@@ -265,7 +265,9 @@ function insertGenericNode(sourceNode, report, blueprint) {
 // image_1…N (by boundary-input name), move IMAGE-output links onto the
 // generic node's single IMAGE output, then remove the subgraph.
 function replaceWithGenericNode(sourceNode, report, blueprint) {
-    const node = createGenericNode(report, blueprint);
+    const graph = sourceNode.graph;
+    if (!graph) return;
+    const node = createGenericNode(report, blueprint, graph);
     if (!node) return;
     const skipped = [];
     try {
@@ -273,8 +275,8 @@ function replaceWithGenericNode(sourceNode, report, blueprint) {
             const srcIdx = (sourceNode.inputs || []).findIndex(
                 (inp) => inp.label === map.name || inp.name === map.name);
             const linkId = srcIdx >= 0 ? sourceNode.inputs[srcIdx].link : null;
-            const link = getLink(linkId);
-            const origin = link && app.graph.getNodeById(link.origin_id);
+            const link = getLink(graph, linkId);
+            const origin = link && graph.getNodeById(link.origin_id);
             const dstIdx = (node.inputs || []).findIndex(
                 (inp) => inp.name === `image_${i + 1}`);
             if (origin && dstIdx >= 0) origin.connect(link.origin_slot, node, dstIdx);
@@ -282,25 +284,25 @@ function replaceWithGenericNode(sourceNode, report, blueprint) {
         const imgOut = (sourceNode.outputs || []).findIndex((o) => o.type === "IMAGE");
         (sourceNode.outputs || []).forEach((out, oi) => {
             for (const lid of [...(out.links || [])]) {
-                const link = getLink(lid);
-                const target = link && app.graph.getNodeById(link.target_id);
+                const link = getLink(graph, lid);
+                const target = link && graph.getNodeById(link.target_id);
                 if (!target) continue;
                 if (oi === imgOut) node.connect(0, target, link.target_slot);
                 else skipped.push(out.label || out.name || out.type);
             }
         });
         node.pos = [...sourceNode.pos];
-        app.graph.remove(sourceNode);
+        graph.remove(sourceNode);
     } catch (e) {
         console.warn("[ComfyCloudHybrid] replace failed:", e);
         toast("warn", "Comfy Cloud",
             `Rewiring failed (${e.message || e}) — the cloud node was inserted, ` +
             "the subgraph was kept.");
         if (sourceNode?.pos) node.pos = [sourceNode.pos[0], sourceNode.pos[1] + 160];
-        app.graph.setDirtyCanvas(true, true);
+        graph.setDirtyCanvas(true, true);
         return;
     }
-    app.graph.setDirtyCanvas(true, true);
+    graph.setDirtyCanvas(true, true);
     toast("success", "Comfy Cloud",
         `Subgraph replaced by “${node.title}”.` +
         (skipped.length ? ` Not rewired (no slot on the instant node): ` +
@@ -420,6 +422,8 @@ async function convertSubgraph(node, mode) {
 // lost them (mirrors the frontend's own clipboard-paste flow:
 // graph.createSubgraph(def) → configure → LiteGraph.createNode(uuid)).
 function restoreSubgraph(cloudNode) {
+    const graph = cloudNode.graph;
+    if (!graph) return;
     const src = cloudNode.properties?.cchSource;
     if (!src?.instance?.type || !src?.defs?.length) {
         toast("error", "Comfy Cloud",
@@ -427,7 +431,7 @@ function restoreSubgraph(cloudNode) {
             + "by a newer “Convert (test)” can be converted back.");
         return;
     }
-    const root = app.graph?.rootGraph ?? app.graph;
+    const root = graph?.rootGraph ?? graph;
     // last-resort patch for sources stored by older builds (raw live defs):
     // the Subgraph constructor dereferences inputNode/outputNode.bounding
     const fixIO = (io, id, x) => {
@@ -456,7 +460,7 @@ function restoreSubgraph(cloudNode) {
         const inst = LiteGraph.createNode(src.instance.type);
         if (!inst) throw new Error(
             "subgraph definition could not be re-registered in this workflow");
-        app.graph.add(inst);
+        graph.add(inst);
         // strip the stored link state (ids from BEFORE the conversion dangle
         // in today's graph) and the stored node id — the id graph.add() just
         // assigned must survive configure, or the frontend's render layer
@@ -468,7 +472,7 @@ function restoreSubgraph(cloudNode) {
         inst.configure(instData);
         inst.pos = [...cloudNode.pos];
         // never trade the cloud node for a node the graph did not accept
-        if (!app.graph.getNodeById(inst.id)) {
+        if (!graph.getNodeById(inst.id)) {
             throw new Error("restored subgraph did not register in the graph "
                 + `(id ${inst.id})`);
         }
@@ -480,8 +484,8 @@ function restoreSubgraph(cloudNode) {
             const cIdx = (cloudNode.inputs || []).findIndex(
                 (x) => x.name === `image_${i + 1}`);
             const linkId = cIdx >= 0 ? cloudNode.inputs[cIdx].link : null;
-            const link = getLink(linkId);
-            const origin = link && app.graph.getNodeById(link.origin_id);
+            const link = getLink(graph, linkId);
+            const origin = link && graph.getNodeById(link.origin_id);
             const dIdx = (inst.inputs || []).findIndex(
                 (x) => x.label === map.name || x.name === map.name);
             if (origin && dIdx >= 0) origin.connect(link.origin_slot, inst, dIdx);
@@ -491,13 +495,13 @@ function restoreSubgraph(cloudNode) {
         const clOut = (cloudNode.outputs || [])[0];
         if (outIdx >= 0 && clOut) {
             for (const lid of [...(clOut.links || [])]) {
-                const link = getLink(lid);
-                const target = link && app.graph.getNodeById(link.target_id);
+                const link = getLink(graph, lid);
+                const target = link && graph.getNodeById(link.target_id);
                 if (target) inst.connect(outIdx, target, link.target_slot);
             }
         }
-        app.graph.remove(cloudNode);
-        app.graph.setDirtyCanvas(true, true);
+        graph.remove(cloudNode);
+        graph.setDirtyCanvas(true, true);
         toast("success", "Comfy Cloud",
             `Subgraph “${inst.title || src.instance.type}” restored. Note: `
             + "parameters edited on the test node are not carried back — the "

@@ -4,11 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "comfycloudhybrid"
-version = "0.1.0"
+version = "0.1.1"
 description = "Run ComfyUI Subgraph Blueprints on Comfy Cloud — hybrid local/cloud execution, one node per blueprint."
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["aiohttp>=3.11.8"]
+
+[project.optional-dependencies]
+test = ["numpy>=1.25", "Pillow", "torch", "av>=17.0.0"]
 
 [project.urls]
 Repository = "https://github.com/philipkrueger/ComfyCloudHybrid"

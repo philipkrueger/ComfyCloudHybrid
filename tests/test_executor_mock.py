@@ -9,6 +9,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import _path  # noqa: F401
 
@@ -383,6 +384,63 @@ class ExecutorTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(CloudError) as ctx:
             await executor.run(self._converted(), {}, timeout_s=5)
         self.assertIn("API key", ctx.exception.user_message)
+
+    async def test_generic_video_in_current_comfy_history(self):
+        # ui.PreviewVideo.as_dict() in ComfyUI 0.35 uses "images", including
+        # mixed workflows with real image outputs and temporary previews.
+        self.mock.outputs_override = {
+            "save_video": {"images": [{"filename": "out.mp4", "type": "output"}],
+                           "animated": [True]},
+            "preview": {"images": [{"filename": "preview.png", "type": "temp"}]},
+            "caption": {"text": ["caption"]},
+        }
+        with patch.object(executor, "_bytes_to_video", return_value="VIDEO_OBJ"), \
+                patch.object(config, "get", side_effect=lambda key: {
+                    "poll_interval_s": 0.001, "queue_timeout_s": 1,
+                }.get(key, config.DEFAULTS[key])):
+            image, video, audio, text = await executor.run_raw_prompt(
+                {"save_video": {"class_type": "SaveVideo", "inputs": {}}}, {}, timeout_s=5)
+        self.assertEqual(video, "VIDEO_OBJ")
+        self.assertEqual(tuple(image.shape), (1, 4, 4, 3))
+        self.assertIsNone(audio)
+        self.assertEqual(text, "caption")
+
+
+class JobCancellationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_task_cancellation_interrupts_job_and_joins_listener(self):
+        started = asyncio.Event()
+        listener_closed = asyncio.Event()
+
+        async def listen(*args):
+            try:
+                started.set()
+                await asyncio.Event().wait()
+            finally:
+                listener_closed.set()
+
+        client = AsyncMock()
+        client.listen_progress.side_effect = listen
+
+        async def wait(*args, **kwargs):
+            await asyncio.Event().wait()
+
+        client.wait_for_job.side_effect = wait
+        task = asyncio.create_task(executor._wait_for_job(
+            client, "job-1", poll=1, timeout=10, queue_timeout=10, node_id=None))
+        await asyncio.wait_for(started.wait(), 2)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        client.interrupt.assert_awaited_once_with("job-1")
+        self.assertTrue(listener_closed.is_set())
+
+    async def test_cloud_error_is_preserved_without_extra_interrupt(self):
+        client = AsyncMock()
+        client.wait_for_job.side_effect = CloudError("already cancelled")
+        with self.assertRaisesRegex(CloudError, "already cancelled"):
+            await executor._wait_for_job(
+                client, "job-1", poll=1, timeout=10, queue_timeout=10, node_id=None)
+        client.interrupt.assert_not_awaited()
 
 
 class ValueOutputParseTest(unittest.TestCase):
