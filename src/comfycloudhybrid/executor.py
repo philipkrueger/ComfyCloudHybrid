@@ -63,12 +63,19 @@ def mask_to_png_bytes(mask) -> bytes:
 
 
 def png_bytes_to_tensor(data: bytes):
-    """PNG/JPEG/WebP bytes → ComfyUI IMAGE tensor [1,H,W,3] float 0..1."""
+    """PNG/JPEG/WebP bytes → ComfyUI IMAGE tensor [1,H,W,3] float 0..1.
+
+    Images with transparency keep their alpha channel ([1,H,W,4]): models
+    such as Qwen Image 2.1 render RGBA, and the RGB under alpha=0 is an
+    arbitrary fill colour (magenta) — dropping alpha would bake that in.
+    ComfyUI core treats a 4-channel IMAGE as RGBA (SaveImage writes it)."""
     import numpy as np
     import torch
     from PIL import Image as PILImage
 
-    img = PILImage.open(_io.BytesIO(data)).convert("RGB")
+    img = PILImage.open(_io.BytesIO(data))
+    has_alpha = "A" in img.getbands() or "transparency" in img.info
+    img = img.convert("RGBA" if has_alpha else "RGB")
     arr = np.asarray(img).astype("float32") / 255.0
     return torch.from_numpy(arr)[None,]
 
@@ -152,6 +159,11 @@ def _batch(tensors: list):
 
     if len(tensors) == 1:
         return tensors[0]
+    # mixed RGB / RGBA results: pad the opaque ones with alpha = 1
+    if len({t.shape[-1] for t in tensors}) > 1 and all(t.shape[-1] in (3, 4) for t in tensors):
+        tensors = [t if t.shape[-1] == 4
+                   else torch.cat([t, torch.ones_like(t[..., :1])], dim=-1)
+                   for t in tensors]
     shapes = {tuple(t.shape[1:]) for t in tensors}
     if len(shapes) > 1:
         log.warning("Cloud-Outputs haben unterschiedliche Größen %s — nur das erste "

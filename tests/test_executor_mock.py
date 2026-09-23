@@ -425,6 +425,34 @@ class ExecutorTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("%CCH_IMAGE_2%", json.dumps(sent))
 
 
+class ImageDecodeTest(unittest.TestCase):
+    def _png(self, mode, color):
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new(mode, (2, 2), color).save(buf, format="PNG")
+        return buf.getvalue()
+
+    def test_transparent_png_keeps_alpha_channel(self):
+        # Qwen Image 2.1 style RGBA output: magenta fill under alpha = 0
+        t = executor.png_bytes_to_tensor(self._png("RGBA", (255, 0, 255, 0)))
+        self.assertEqual(tuple(t.shape), (1, 2, 2, 4))
+        self.assertEqual(float(t[0, 0, 0, 3]), 0.0)
+        self.assertEqual(float(t[0, 0, 0, 0]), 1.0)  # colour data untouched
+
+    def test_opaque_png_stays_rgb(self):
+        t = executor.png_bytes_to_tensor(self._png("RGB", (10, 20, 30)))
+        self.assertEqual(tuple(t.shape), (1, 2, 2, 3))
+
+    def test_batch_pads_rgb_with_opaque_alpha(self):
+        import torch
+        rgb = torch.zeros((1, 2, 2, 3))
+        rgba = torch.zeros((1, 2, 2, 4))
+        out = executor._batch([rgb, rgba])
+        self.assertEqual(tuple(out.shape), (2, 2, 2, 4))
+        self.assertEqual(float(out[0, ..., 3].min()), 1.0)
+        self.assertEqual(float(out[1, ..., 3].max()), 0.0)
+
+
 class JobCancellationTest(unittest.IsolatedAsyncioTestCase):
     async def test_task_cancellation_interrupts_job_and_joins_listener(self):
         started = asyncio.Event()
