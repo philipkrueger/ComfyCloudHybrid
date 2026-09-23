@@ -199,8 +199,9 @@ function addParamWidgets(node, params) {
             if (p.max != null) opts.max = p.max;
             node.addWidget("number", p.name, Number(p.value ?? 0), cb, opts);
         } else if (p.type === "COMBO" && Array.isArray(p.options) && p.options.length) {
-            node.addWidget("combo", p.name, p.value ?? p.options[0], cb,
-                { values: p.options });
+            const values = p.value == null || p.options.includes(p.value)
+                ? p.options : [p.value, ...p.options];
+            node.addWidget("combo", p.name, p.value ?? values[0], cb, { values });
         } else {
             node.addWidget("text", p.name, String(p.value ?? ""), cb);
         }

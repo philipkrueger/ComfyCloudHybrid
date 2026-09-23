@@ -536,6 +536,14 @@ async def run_raw_prompt(prompt: dict, image_tokens: dict[str, "object"],
         prompt = copy.deepcopy(prompt)
         for token, tensor in image_tokens.items():
             if tensor is None:
+                # unconnected slot: drop the placeholder so an optional target
+                # falls back to its cloud default instead of receiving the
+                # literal token string (a required target fails validation)
+                for entry in prompt.values():
+                    inputs = entry.get("inputs", {})
+                    for iname in [i for i, v in inputs.items()
+                                  if v == token or v == token.strip("%")]:
+                        del inputs[iname]
                 continue
             name = await upload_cached(client, tensor_to_png_bytes(tensor),
                                        f"cch_generic_{hashlib.sha256(token.encode()).hexdigest()[:8]}.png")

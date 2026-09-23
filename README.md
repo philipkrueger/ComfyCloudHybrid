@@ -85,7 +85,7 @@ hot without a restart).
   (upload dedupe by content hash).
 - **☁ Run Cloud Workflow** — generic fallback: any API-format JSON
   (File → Export (API)) plus up to 4 image inputs via the placeholders
-  `%CCH_IMAGE_1%`…`%CCH_IMAGE_4%`.
+  `%CCH_IMAGE_1%`…`%CCH_IMAGE_8%` (unconnected placeholders are dropped).
 
 ## Convert a subgraph to a cloud node
 

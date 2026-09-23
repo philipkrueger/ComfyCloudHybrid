@@ -390,3 +390,59 @@ class TestSaveBlueprint(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGenericImageSlots(unittest.TestCase):
+    """Blueprints like Qwen Image Edit expose many optional image inputs; only
+    the ones the instant node has slots for need to be connectable."""
+
+    def _cw(self, count, required_beyond=False):
+        from comfycloudhybrid.converter.model import BoundInput, ConvertedWorkflow
+        prompt = {"enc": {"class_type": "Enc", "inputs": {}},
+                  "cch_save_0": {"class_type": "SaveImage", "inputs": {"images": ["enc", 0]}}}
+        inputs = []
+        for n in range(1, count + 1):
+            name = f"image_{n}"
+            prompt["enc"]["inputs"][name] = [SENTINEL, name]
+            inputs.append(BoundInput(
+                name=name, safe_id=name, type="IMAGE", kind="slot",
+                targets=[("enc", name)],
+                optional=n > 1 and not (required_beyond and n > ondemand.MAX_GENERIC_IMAGES)))
+        return ConvertedWorkflow(name="many", prompt=prompt, inputs=inputs,
+                                 outputs=[], required_uploads=[])
+
+    def test_more_than_four_images_fit_the_slots(self):
+        r = ondemand._to_generic(self._cw(6))
+        self.assertTrue(r["instant_testable"], r.get("generic_reason"))
+        self.assertEqual([i["token"] for i in r["image_inputs"]],
+                         ondemand.GENERIC_TOKENS[:6])
+        self.assertEqual(r["generic_warnings"], [])
+
+    def test_optional_images_beyond_the_slots_are_dropped(self):
+        r = ondemand._to_generic(self._cw(ondemand.MAX_GENERIC_IMAGES + 2))
+        self.assertTrue(r["instant_testable"], r.get("generic_reason"))
+        self.assertEqual(len(r["image_inputs"]), ondemand.MAX_GENERIC_IMAGES)
+        prompt = json.loads(r["generic_json"])
+        self.assertNotIn(SENTINEL, json.dumps(prompt))
+        self.assertNotIn(f"image_{ondemand.MAX_GENERIC_IMAGES + 1}", prompt["enc"]["inputs"])
+        self.assertEqual(len(r["generic_warnings"]), 1)
+        self.assertIn(f"image_{ondemand.MAX_GENERIC_IMAGES + 2}", r["generic_warnings"][0])
+
+    def test_baked_combo_value_is_always_an_option(self):
+        from comfycloudhybrid.converter.model import BoundInput, ConvertedWorkflow
+        prompt = {"ld": {"class_type": "UNETLoader", "inputs": {"unet_name": [SENTINEL, "unet_name"]}},
+                  "cch_save_0": {"class_type": "SaveImage", "inputs": {"images": ["ld", 0]}}}
+        cw = ConvertedWorkflow(name="m", prompt=prompt, outputs=[], required_uploads=[], inputs=[
+            BoundInput(name="unet_name", safe_id="unet_name", type="COMBO", kind="proxy",
+                       targets=[("ld", "unet_name")], default="new_model.safetensors",
+                       combo_options=["old_a.safetensors", "old_b.safetensors"])])
+        r = ondemand._to_generic(cw)
+        self.assertTrue(r["instant_testable"], r.get("generic_reason"))
+        self.assertEqual(r["baked_inputs"][0]["options"][0], "new_model.safetensors")
+        self.assertEqual(len(r["baked_inputs"][0]["options"]), 3)
+
+    def test_required_image_beyond_the_slots_blocks(self):
+        r = ondemand._to_generic(self._cw(ondemand.MAX_GENERIC_IMAGES + 1, required_beyond=True))
+        self.assertFalse(r["instant_testable"])
+        self.assertIn("required", r["generic_reason"])
+        self.assertNotIn("unfilled inputs remain", r["generic_reason"])

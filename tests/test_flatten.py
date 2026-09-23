@@ -241,6 +241,40 @@ class TestOptionalInputs(unittest.TestCase):
         self.assertFalse(img.optional)
 
 
+    def test_autogrow_members_beyond_min_are_optional(self):
+        from comfycloudhybrid.converter.flatten import _target_is_optional
+        prompt = {"n": {"class_type": "FakeAutogrow", "inputs": {}}}
+        self.assertFalse(_target_is_optional(prompt, schemas(), "n", "images.image_1"))
+        self.assertTrue(_target_is_optional(prompt, schemas(), "n", "images.image_2"))
+        self.assertTrue(_target_is_optional(prompt, schemas(), "n", "images.image_9"))
+        self.assertFalse(_target_is_optional(prompt, schemas(), "n", "clip"))
+        self.assertFalse(_target_is_optional(prompt, schemas(), "n", "nope.image_2"))
+
+    def test_autogrow_boundary_images_become_optional(self):
+        # Qwen Image 2.1 style: every reference image feeds one member of an
+        # Autogrow group; only the first (min=1) is required
+        bp = load("nested_subgraph.json")
+        inner = bp["definitions"]["subgraphs"][1]
+        node = inner["nodes"][0]
+        node["type"] = "FakeAutogrow"
+        node["inputs"] = [{"name": "images.image_1", "type": "IMAGE", "link": 20},
+                          {"name": "images.image_2", "type": "IMAGE", "link": 23}]
+        node["widgets_values"] = []
+        inner["inputs"].append({"id": "io1", "name": "image_2", "type": "IMAGE", "linkIds": [23]})
+        inner["links"].append({"id": 23, "origin_id": -10, "origin_slot": 1,
+                               "target_id": 5, "target_slot": 1, "type": "IMAGE"})
+        outer = bp["definitions"]["subgraphs"][0]
+        outer["inputs"].append({"id": "io2", "name": "image_2", "type": "IMAGE", "linkIds": [13]})
+        outer["nodes"][0]["inputs"].append({"name": "image_2", "type": "IMAGE", "link": 13})
+        outer["links"].append({"id": 13, "origin_id": -10, "origin_slot": 1,
+                               "target_id": 1, "target_slot": 1, "type": "IMAGE"})
+        cw = convert(bp, schemas())
+        by_id = {i.safe_id: i for i in cw.inputs}
+        self.assertFalse(by_id["image"].optional)
+        self.assertTrue(by_id["image_2"].optional)
+        self.assertEqual(cw.prompt["99:1:5"]["inputs"]["images.image_2"], [SENTINEL, "image_2"])
+
+
 class TestVideoOutput(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

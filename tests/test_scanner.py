@@ -22,13 +22,16 @@ class TestScanner(unittest.TestCase):
 
             saved_curated = config.CURATED_DIR
             saved_config = config.CONFIG_PATH
+            saved_saved = config.SAVED_DIR
             config.CURATED_DIR = curated
             config.CONFIG_PATH = tmp / "config.json"
+            config.SAVED_DIR = tmp / "saved"   # the dev checkout may hold user blueprints
             try:
                 found = scanner.scan()
             finally:
                 config.CURATED_DIR = saved_curated
                 config.CONFIG_PATH = saved_config
+                config.SAVED_DIR = saved_saved
 
             self.assertEqual(len(found), 1)
             bp = found[0]

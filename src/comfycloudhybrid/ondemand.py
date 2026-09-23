@@ -32,9 +32,10 @@ from .converter.schema_source import SchemaSource
 
 log = logging.getLogger("ComfyCloudHybrid")
 
-# the generic runner exposes exactly four image inputs (see nodes_generic.py)
-GENERIC_TOKENS = ["%CCH_IMAGE_1%", "%CCH_IMAGE_2%", "%CCH_IMAGE_3%", "%CCH_IMAGE_4%"]
-MAX_GENERIC_IMAGES = len(GENERIC_TOKENS)
+# the generic runner exposes this many optional image inputs (nodes_generic.py
+# builds its schema from the same list)
+MAX_GENERIC_IMAGES = 8
+GENERIC_TOKENS = [f"%CCH_IMAGE_{n}%" for n in range(1, MAX_GENERIC_IMAGES + 1)]
 
 # on an unexpected conversion crash the exact payload is preserved here so a
 # bug report carries the real live-frontend structure, not a guess
@@ -233,6 +234,7 @@ def preflight(blueprint: dict, schemas: SchemaSource) -> dict:
     report["ok"] = not report["errors"]
     if report["ok"]:
         report.update(_to_generic(cw))
+        report["warnings"].extend(report.pop("generic_warnings", []))
         # blueprint-file-shaped source (dict links, reconstructed boundaries,
         # IO bounding boxes): the frontend stores this on the instant node so
         # "Convert back to subgraph" can re-create the definition safely —
@@ -247,6 +249,12 @@ def _set_input(prompt: dict, key: str, iname: str, value) -> None:
         node.setdefault("inputs", {})[iname] = value
 
 
+def _drop_input(prompt: dict, key: str, iname: str) -> None:
+    node = prompt.get(key)
+    if node is not None:
+        (node.get("inputs") or {}).pop(iname, None)
+
+
 def _remaining_sentinel_ids(prompt: dict) -> set[str]:
     from .converter.model import SENTINEL
     left = set()
@@ -259,21 +267,32 @@ def _remaining_sentinel_ids(prompt: dict) -> set[str]:
 
 def _to_generic(cw: ConvertedWorkflow) -> dict:
     """Rewrite the converted prompt so the generic runner can execute it:
-    IMAGE slot inputs become %CCH_IMAGE_N% tokens (max 4), value inputs are
-    baked to their default. instant_testable is False (with a reason) when the
-    subgraph needs an input the generic node cannot supply — a MASK input, a
-    fifth image, or a value input without a default."""
+    IMAGE slot inputs become %CCH_IMAGE_N% tokens (max MAX_GENERIC_IMAGES),
+    value inputs are baked to their default. Optional images beyond the slot
+    count are dropped (their target inputs fall back to the cloud default).
+    instant_testable is False (with a reason) when the subgraph needs an input
+    the generic node cannot supply — a MASK input, a required image beyond the
+    slots, or a value input without a default."""
     prompt = copy.deepcopy(cw.prompt)
     image_inputs: list[dict] = []
     baked: list[dict] = []
     reasons: list[str] = []
+    warnings: list[str] = []
+    dropped: list[str] = []
+    reported: set[str] = set()   # inputs already named in a reason
     img_n = 0
 
     for bi in cw.inputs:
         if bi.type == "IMAGE":
             if img_n >= MAX_GENERIC_IMAGES:
-                reasons.append(f"more than {MAX_GENERIC_IMAGES} image inputs "
-                               f"(e.g. '{bi.name}')")
+                if bi.optional:
+                    for key, iname in bi.targets:
+                        _drop_input(prompt, key, iname)
+                    dropped.append(bi.name)
+                else:
+                    reasons.append(f"more than {MAX_GENERIC_IMAGES} image inputs "
+                                   f"(required '{bi.name}')")
+                    reported.add(bi.safe_id)
                 continue
             token = GENERIC_TOKENS[img_n]
             img_n += 1
@@ -283,6 +302,7 @@ def _to_generic(cw: ConvertedWorkflow) -> dict:
         elif bi.type in ("STRING", "INT", "FLOAT", "BOOLEAN", "COMBO"):
             if bi.default is None:
                 reasons.append(f"value input '{bi.name}' has no default to bake in")
+                reported.add(bi.safe_id)
                 continue
             for key, iname in bi.targets:
                 _set_input(prompt, key, iname, bi.default)
@@ -292,7 +312,11 @@ def _to_generic(cw: ConvertedWorkflow) -> dict:
             entry = {"name": bi.name, "value": bi.default, "type": bi.type,
                      "targets": [list(t) for t in bi.targets]}
             if bi.type == "COMBO" and bi.combo_options:
-                entry["options"] = list(bi.combo_options)
+                # the baked value must be offered even when the cloud catalog
+                # lags behind the models the cloud actually serves — otherwise
+                # the frontend flags the widget as invalid (red ring)
+                entry["options"] = [bi.default] + [o for o in bi.combo_options
+                                                   if o != bi.default]
             if bi.minimum is not None:
                 entry["min"] = bi.minimum
             if bi.maximum is not None:
@@ -300,21 +324,28 @@ def _to_generic(cw: ConvertedWorkflow) -> dict:
             baked.append(entry)
         else:  # MASK, UPLOAD_COMBO, anything else
             reasons.append(f"input '{bi.name}' ({bi.type}) — the instant node "
-                           "only accepts up to four image inputs")
+                           f"only accepts up to {MAX_GENERIC_IMAGES} image inputs")
+            reported.add(bi.safe_id)
+
+    if dropped:
+        warnings.append(f"optional image inputs beyond the {MAX_GENERIC_IMAGES} "
+                        "instant-node slots are not connectable: " + ", ".join(dropped))
 
     # outputs need no gate: the generic runner returns every transferable
     # result on its IMAGE / VIDEO / AUDIO / TEXT outputs (a MASK comes back
     # as a grayscale image batch, value outputs as text)
 
-    leftover = _remaining_sentinel_ids(prompt)
+    leftover = _remaining_sentinel_ids(prompt) - reported
     if leftover:
         reasons.append("unfilled inputs remain: " + ", ".join(sorted(leftover)))
 
     if reasons:
         return {"instant_testable": False, "generic_reason": "; ".join(reasons),
+                "generic_warnings": warnings,
                 "image_inputs": image_inputs, "baked_inputs": baked}
     return {"instant_testable": True,
             "generic_json": json.dumps(prompt, indent=2),
+            "generic_warnings": warnings,
             "image_inputs": image_inputs, "baked_inputs": baked}
 
 

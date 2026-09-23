@@ -9,10 +9,9 @@ from comfy_api.latest import io
 
 from . import executor
 from .cloud_client import CloudError
+from .ondemand import GENERIC_TOKENS as TOKENS
 
 log = logging.getLogger("ComfyCloudHybrid")
-
-TOKENS = ["%CCH_IMAGE_1%", "%CCH_IMAGE_2%", "%CCH_IMAGE_3%", "%CCH_IMAGE_4%"]
 
 
 class CloudHybridRunWorkflow(io.ComfyNode):
@@ -25,7 +24,7 @@ class CloudHybridRunWorkflow(io.ComfyNode):
             description=(
                 "Runs any API-format workflow JSON on Comfy Cloud "
                 "(File → Export (API)). Image inputs: put the placeholders "
-                "%CCH_IMAGE_1%…%CCH_IMAGE_4% as input values in the JSON (e.g. in "
+                f"%CCH_IMAGE_1%…{TOKENS[-1]} as input values in the JSON (e.g. in "
                 "a LoadImage 'image' field) and connect the images here. "
                 "Returns whatever the cloud job produced: image outputs as one "
                 "batch, plus the first VIDEO / AUDIO output and any preview "
@@ -33,10 +32,8 @@ class CloudHybridRunWorkflow(io.ComfyNode):
             inputs=[
                 io.String.Input("workflow_json", multiline=True, default="",
                                 tooltip="API-format workflow JSON (or a path to a .json file)"),
-                io.Image.Input("image_1", optional=True),
-                io.Image.Input("image_2", optional=True),
-                io.Image.Input("image_3", optional=True),
-                io.Image.Input("image_4", optional=True),
+                *[io.Image.Input(f"image_{n}", optional=True)
+                  for n in range(1, len(TOKENS) + 1)],
                 io.Int.Input("timeout_s", default=600, min=30, max=3600,
                              tooltip="Maximum time to wait for the cloud job"),
             ],
@@ -51,8 +48,7 @@ class CloudHybridRunWorkflow(io.ComfyNode):
         )
 
     @classmethod
-    async def execute(cls, workflow_json="", image_1=None, image_2=None,
-                      image_3=None, image_4=None, timeout_s=600) -> io.NodeOutput:
+    async def execute(cls, workflow_json="", timeout_s=600, **images) -> io.NodeOutput:
         text = (workflow_json or "").strip()
         if not text:
             raise CloudError("No workflow JSON provided.")
@@ -72,7 +68,8 @@ class CloudHybridRunWorkflow(io.ComfyNode):
         if "nodes" in prompt and "links" in prompt:
             raise CloudError("This is the UI workflow format. Please export in "
                              "API format (File → Export (API)).")
-        images = dict(zip(TOKENS, [image_1, image_2, image_3, image_4]))
+        tokens = {token: images.get(f"image_{n}")
+                  for n, token in enumerate(TOKENS, start=1)}
         image, video, audio, text = await executor.run_raw_prompt(
-            prompt, images, timeout_s=timeout_s, node_id=cls.hidden.unique_id)
+            prompt, tokens, timeout_s=timeout_s, node_id=cls.hidden.unique_id)
         return io.NodeOutput(image, video, audio, text)

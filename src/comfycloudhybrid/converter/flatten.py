@@ -77,15 +77,34 @@ def _clean_label(name) -> str:
     return _OPTIONAL_RE.sub("", str(name)).strip() or "input"
 
 
+_AUTOGROW_TYPE = "COMFY_AUTOGROW_V3"
+
+
 def _target_is_optional(prompt: dict, schemas: SchemaSource,
                         key: str, iname: str) -> bool:
     """True when the targeted input sits in the optional section of its
-    class schema — the cloud runs the node fine without it."""
+    class schema — the cloud runs the node fine without it.
+
+    Members of a V3 Autogrow group ("images.image_3" on
+    TextEncodeQwenImage21, say) are optional beyond the group's ``min``:
+    the group grows with the connections it receives."""
     cls = (prompt.get(key) or {}).get("class_type")
     entry = schemas.get(cls) if cls else None
     if not entry:
         return False
-    return iname in ((entry.get("input") or {}).get("optional") or {})
+    sections = entry.get("input") or {}
+    if iname in (sections.get("optional") or {}):
+        return True
+    group, _, member = iname.partition(".")
+    if not member:
+        return False
+    spec = (sections.get("required") or {}).get(group) or (sections.get("optional") or {}).get(group)
+    if not (isinstance(spec, list) and spec and spec[0] == _AUTOGROW_TYPE):
+        return False
+    template = (spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {}).get("template") or {}
+    names = template.get("names") or []
+    index = names.index(member) if member in names else len(names)
+    return index >= int(template.get("min", 1) or 0)
 
 
 class _Ctx:

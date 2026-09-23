@@ -68,6 +68,16 @@ CLOUD_OBJECT_INFO = {
                 "image_b": ["IMAGE", {}]},
         },
     },
+    "FakeAutogrow": {
+        # V3 Autogrow group as the cloud catalog serializes it
+        # (TextEncodeQwenImage21.images): members beyond min are optional
+        "input": {"required": {
+            "images": ["COMFY_AUTOGROW_V3", {
+                "template": {"input": {"required": {"image": ["IMAGE", {}]}},
+                             "names": ["image_1", "image_2", "image_3"],
+                             "min": 1}}]}},
+        "output": ["IMAGE"],
+    },
     "PrimitiveInt": {
         "input": {"required": {
             "value": ["INT", {"default": 0, "min": -2147483648, "max": 2147483647,

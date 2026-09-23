@@ -406,6 +406,25 @@ class ExecutorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(text, "caption")
 
 
+    async def test_generic_unconnected_image_token_is_dropped(self):
+        # only image_1 is connected: the %CCH_IMAGE_2% placeholder must not
+        # reach the cloud as a literal string, the target input is removed
+        import torch
+        img = torch.zeros((1, 4, 4, 3), dtype=torch.float32)
+        prompt = {"enc": {"class_type": "Enc",
+                          "inputs": {"image1": "%CCH_IMAGE_1%", "image2": "%CCH_IMAGE_2%"}},
+                  "save": {"class_type": "SaveImage", "inputs": {"images": ["enc", 0]}}}
+        with patch.object(config, "get", side_effect=lambda key: {
+                "poll_interval_s": 0.001, "queue_timeout_s": 1,
+                }.get(key, config.DEFAULTS[key])):
+            await executor.run_raw_prompt(
+                prompt, {"%CCH_IMAGE_1%": img, "%CCH_IMAGE_2%": None}, timeout_s=5)
+        sent = self.mock.submitted[0]["prompt"]
+        self.assertEqual(sent["enc"]["inputs"]["image1"], ["cch_load_cch_image_1", 0])
+        self.assertNotIn("image2", sent["enc"]["inputs"])
+        self.assertNotIn("%CCH_IMAGE_2%", json.dumps(sent))
+
+
 class JobCancellationTest(unittest.IsolatedAsyncioTestCase):
     async def test_task_cancellation_interrupts_job_and_joins_listener(self):
         started = asyncio.Event()
