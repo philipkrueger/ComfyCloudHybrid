@@ -50,7 +50,8 @@ ausgeführt — Inputs hochladen, Job pollen, Bilder zurückladen.
 
 - Subgraph-Grenzen: rein IMAGE/MASK/AUDIO (FLAC-Upload→LoadAudio)/Werte
   (nicht übertragbare Input-Typen wie BOUNDING_BOX werden gedroppt, wenn alle
-  Ziele optional sind). Raus: IMAGE, MASK (MaskToImage→SaveImage), VIDEO,
+  Ziele optional sind). Raus: IMAGE (RGBA bleibt 4-kanalig), MASK
+  (MaskToImage→SaveImage), VIDEO,
   AUDIO (SaveAudio/FLAC→Waveform), plus Wert-Outputs STRING/INT/FLOAT/
   BOOLEAN/BOUNDING_BOX über den PreviewAny-Text-Kanal (History `text`).
   LATENT/MODEL/CLIP-Ausgänge werden übersprungen (mit Hinweis).

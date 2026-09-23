@@ -422,6 +422,47 @@ async function convertSubgraph(node, mode) {
 // stored on the instant node, re-register its definitions if the workflow
 // lost them (mirrors the frontend's own clipboard-paste flow:
 // graph.createSubgraph(def) → configure → LiteGraph.createNode(uuid)).
+// Definitions stored by older builds are schema 0.4 (frontend live
+// serialisation): counters as last_node_id/last_link_id, reroutes + link
+// parents under `extra`, links possibly positional. LGraph.configure treats
+// 0.4 links as arrays (dict links collapse to one bogus link) and overwrites
+// the shared id counters — bring the definition to schema 1 first.
+function upgradeDefinition(d) {
+    if (d.version === 1 && d.state && typeof d.state === "object") return attachBoundaryLinkIds(d);
+    if (d.version != null && d.version !== 0.4 && d.last_node_id == null) return attachBoundaryLinkIds(d);
+    const extra = { ...(d.extra || {}) };
+    const parents = new Map((extra.linkExtensions || []).map((e) => [e?.id, e?.parentId]));
+    delete extra.linkExtensions;
+    const reroutes = d.reroutes ?? extra.reroutes;
+    delete extra.reroutes;
+    const links = (d.links || []).map((l) => Array.isArray(l)
+        ? { id: l[0], origin_id: l[1], origin_slot: l[2], target_id: l[3], target_slot: l[4], type: l[5] }
+        : { ...l }).map((l) => parents.get(l.id) != null ? { ...l, parentId: parents.get(l.id) } : l);
+    const maxId = (items) => Math.max(0, ...(items || []).map((i) => Number(i?.id) || 0));
+    const state = {
+        lastNodeId: d.last_node_id ?? 0, lastLinkId: d.last_link_id ?? 0,
+        lastGroupId: maxId(d.groups), lastRerouteId: maxId(reroutes),
+        ...(d.state || {}),
+    };
+    const out = { ...d, version: 1, state, links, extra };
+    if (reroutes) out.reroutes = reroutes;
+    delete out.last_node_id;
+    delete out.last_link_id;
+    return attachBoundaryLinkIds(out);
+}
+
+// Boundary slots resolve their inner target (and promoted widget) through
+// slot.linkIds; sources stored by older builds lack them.
+function attachBoundaryLinkIds(d) {
+    const fill = (slots, nodeId, idKey, slotKey) => (slots || []).map((s, k) =>
+        s && !s.linkIds?.length
+            ? { ...s, linkIds: (d.links || []).filter((l) => l[idKey] === nodeId && l[slotKey] === k).map((l) => l.id) }
+            : s);
+    return { ...d,
+        inputs: fill(d.inputs, -10, "origin_id", "origin_slot"),
+        outputs: fill(d.outputs, -20, "target_id", "target_slot") };
+}
+
 function restoreSubgraph(cloudNode) {
     const graph = cloudNode.graph;
     if (!graph) return;
@@ -441,13 +482,18 @@ function restoreSubgraph(cloudNode) {
         if (!Array.isArray(o.bounding)) o.bounding = [x, 0, 120, 80];
         return o;
     };
-    const defs = src.defs.map((d) => ({
+    const defs = src.defs.map((d) => upgradeDefinition({
         ...d,
         inputNode: fixIO(d.inputNode, -10, -260),
         outputNode: fixIO(d.outputNode, -20, 260),
         widgets: Array.isArray(d.widgets) ? d.widgets : [],
     }));
     try {
+        // subgraphs share the root graph's id counters; configuring a
+        // definition must never move them backwards (next id would collide
+        // with a live node — the cloud node itself)
+        const idState = root.state;
+        const counters = idState ? { ...idState } : null;
         const registered = [];
         for (const def of defs) {
             const existing = typeof root.subgraphs?.get === "function"
@@ -457,6 +503,11 @@ function restoreSubgraph(cloudNode) {
             }
         }
         for (const [sg, def] of registered) sg?.configure?.(def);
+        if (counters) {
+            for (const [k, v] of Object.entries(counters)) {
+                if (typeof v === "number" && typeof idState[k] === "number" && idState[k] < v) idState[k] = v;
+            }
+        }
 
         const inst = LiteGraph.createNode(src.instance.type);
         if (!inst) throw new Error(

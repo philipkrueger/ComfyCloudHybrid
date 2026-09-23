@@ -7,7 +7,20 @@ const source = readFileSync(new URL("../../web/js/comfycloudhybrid.js", import.m
     .replace(/^import .*;\n/gm, "");
 
 function setup() {
-    const root = { subgraphs: new Map() };
+    const root = {
+        subgraphs: new Map(), created: [],
+        state: { lastNodeId: 10, lastLinkId: 20, lastGroupId: 0, lastRerouteId: 0 },
+        // mimic LGraph.configure: schema 0.4 copies counters verbatim, schema 1 merges with max
+        createSubgraph(def) {
+            this.created.push(def);
+            const sg = { configure: (d) => {
+                if (d.version === 0.4) this.state.lastNodeId = d.last_node_id;
+                else if (d.state) this.state.lastNodeId = Math.max(this.state.lastNodeId, d.state.lastNodeId ?? 0);
+            } };
+            this.subgraphs.set(def.id, sg);
+            return sg;
+        },
+    };
     const graph = {
         rootGraph: root, nodes: new Map(), links: new Map(), nextId: 1, nextLink: 1,
         add(node) { node.id = this.nextId++; node.graph = this; this.nodes.set(node.id, node); },
@@ -84,6 +97,38 @@ test("replace and restore preserve nested IMAGE connections and assigned ids", (
     assert.ok(!s.graph.nodes.has(cloud.id));
     assert.equal(s.graph.links.get(restored.inputs[0].link).origin_id, s.origin.id);
     assert.equal(s.graph.links.get(s.target.inputs[0].link).origin_id, restored.id);
+    assert.deepEqual(s.errors, []);
+});
+
+test("restore re-creates a dropped definition without moving shared id counters back", () => {
+    // frontend 1.52 drops a definition once its last instance is removed;
+    // sources stored by older builds carry the live schema 0.4 definition
+    const s = setup();
+    s.blueprint.definitions.subgraphs[0] = {
+        id: s.subgraph.type, version: 0.4, last_node_id: 3, last_link_id: 2,
+        inputs: [{ id: "i0", name: "image", type: "IMAGE" }],
+        outputs: [{ id: "o0", name: "IMAGE", type: "IMAGE" }],
+        links: [{ id: 1, origin_id: -10, origin_slot: 0, target_id: 5, target_slot: 0, type: "IMAGE" },
+                { id: 2, origin_id: 5, origin_slot: 0, target_id: -20, target_slot: 0, type: "IMAGE" }],
+        extra: { reroutes: [{ id: 4 }], linkExtensions: [{ id: 1, parentId: 4 }] },
+    };
+    s.replaceWithGenericNode(s.subgraph, s.report, s.blueprint);
+    const cloud = [...s.graph.nodes.values()].find(n => n.type === "CloudHybrid_RunWorkflow");
+    s.root.subgraphs.clear();
+    s.restoreSubgraph(cloud);
+    assert.equal(s.root.created.length, 1);
+    const def = s.root.created[0];
+    assert.equal(def.version, 1);
+    // objects cross the vm realm: compare by value, not prototype
+    assert.equal(JSON.stringify(def.state),
+        JSON.stringify({ lastNodeId: 3, lastLinkId: 2, lastGroupId: 0, lastRerouteId: 4 }));
+    assert.equal(def.links[0].parentId, 4);
+    assert.equal(JSON.stringify(def.reroutes), JSON.stringify([{ id: 4 }]));
+    assert.equal(def.last_node_id, undefined);
+    assert.equal(JSON.stringify(def.inputs[0].linkIds), "[1]");
+    assert.equal(JSON.stringify(def.outputs[0].linkIds), "[2]");
+    assert.equal(s.root.state.lastNodeId, 10);
+    assert.ok([...s.graph.nodes.values()].find(n => n.type === "subgraph-id"));
     assert.deepEqual(s.errors, []);
 });
 

@@ -63,16 +63,52 @@ def _normalize_blueprint(bp: dict) -> dict:
                 else l
                 for l in links]
 
-    def walk(container: dict) -> None:
+    def walk(container: dict, is_definition: bool = False) -> None:
         fix_links(container)
+        if is_definition:
+            _upgrade_definition_schema(container)
         for sg in (container.get("definitions") or {}).get("subgraphs") or []:
             if isinstance(sg, dict):
-                walk(sg)
+                walk(sg, is_definition=True)
 
     bp = copy.deepcopy(bp)
     walk(bp)
     _reconstruct_boundaries(bp)
     return bp
+
+
+def _upgrade_definition_schema(sg: dict) -> None:
+    """Bring a subgraph definition to schema 1 (what blueprint files carry).
+
+    The live frontend serialises definitions as schema 0.4: counters in
+    last_node_id/last_link_id, reroutes and link parent ids under `extra`.
+    Feeding that back into the canvas is destructive: LGraph.configure reads
+    0.4 links as positional arrays (dict links collapse) and copies the
+    counters straight into the root graph's SHARED id state, so the next
+    node id collides with an existing node. Schema 1 uses a `state` block
+    that configure merges with max()."""
+    if sg.get("version") == 1 and isinstance(sg.get("state"), dict):
+        return
+    if sg.get("version") not in (0.4, None) and "last_node_id" not in sg:
+        return
+    extra = sg.get("extra") if isinstance(sg.get("extra"), dict) else {}
+    state = dict(sg.get("state") or {})
+    state.setdefault("lastNodeId", sg.pop("last_node_id", 0) or 0)
+    state.setdefault("lastLinkId", sg.pop("last_link_id", 0) or 0)
+    reroutes = extra.pop("reroutes", None)
+    if reroutes is not None and "reroutes" not in sg:
+        sg["reroutes"] = reroutes
+    parents = {e.get("id"): e.get("parentId")
+               for e in extra.pop("linkExtensions", None) or [] if isinstance(e, dict)}
+    for link in sg.get("links") or []:
+        if isinstance(link, dict) and parents.get(link.get("id")) is not None:
+            link["parentId"] = parents[link["id"]]
+    ids = lambda items: [i.get("id", 0) for i in items or [] if isinstance(i, dict)
+                         and isinstance(i.get("id"), (int, float))]
+    state.setdefault("lastGroupId", max(ids(sg.get("groups")) + [0]))
+    state.setdefault("lastRerouteId", max(ids(sg.get("reroutes")) + [0]))
+    sg["state"] = state
+    sg["version"] = 1
 
 
 def _reconstruct_boundaries(bp: dict) -> None:
@@ -130,6 +166,22 @@ def _reconstruct_boundaries(bp: dict) -> None:
                 sg["outputNode"]["bounding"] = [260.0, 0.0, 120.0, 80.0]
             if not isinstance(sg.get("widgets"), list):
                 sg["widgets"] = []
+            # the canvas resolves a boundary slot's inner target (and the
+            # promoted widget behind it) through slot.linkIds — without them
+            # a restored subgraph shows bare slots and no widgets
+            _attach_boundary_link_ids(sg, links)
+
+
+def _attach_boundary_link_ids(sg: dict, links: list[dict]) -> None:
+    for key, node_id, slot_key in (("inputs", -10, "origin_slot"),
+                                   ("outputs", -20, "target_slot")):
+        for k, slot in enumerate(sg.get(key) or []):
+            if not isinstance(slot, dict) or slot.get("linkIds"):
+                continue
+            id_key = "origin_id" if node_id == -10 else "target_id"
+            slot["linkIds"] = [l["id"] for l in links
+                               if l.get(id_key) == node_id and l.get(slot_key) == k
+                               and l.get("id") is not None]
 
 
 def _dump_debug(blueprint: dict, err_text: str) -> str | None:

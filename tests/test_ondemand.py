@@ -215,6 +215,44 @@ class TestLiveDesktopFormat(unittest.TestCase):
         self.assertIsInstance(sg["widgets"], list)
         for l in sg["links"]:
             self.assertIsInstance(l, dict)
+        # boundary slots carry the ids of their inner links — the canvas
+        # resolves promoted widgets through them
+        for k, slot in enumerate(sg["inputs"]):
+            expected = [l["id"] for l in sg["links"]
+                        if l["origin_id"] == -10 and l["origin_slot"] == k]
+            self.assertEqual(slot["linkIds"], expected, slot)
+            self.assertTrue(slot["linkIds"], slot)
+        for k, slot in enumerate(sg["outputs"]):
+            expected = [l["id"] for l in sg["links"]
+                        if l["target_id"] == -20 and l["target_slot"] == k]
+            self.assertEqual(slot["linkIds"], expected, slot)
+
+    def test_source_definition_is_upgraded_to_schema_1(self):
+        # the live frontend serialises definitions as schema 0.4; fed back to
+        # the canvas that collapses dict links and overwrites the root's
+        # shared id counters (next node id collides with the cloud node)
+        bp = _live_ify(load("mask_blueprint.json"))
+        sg = bp["definitions"]["subgraphs"][0]
+        sg.update({"version": 0.4, "last_node_id": 42, "last_link_id": 7})
+        sg.pop("state", None)
+        sg["extra"] = {"reroutes": [{"id": 3, "pos": [0, 0], "linkIds": [1]}],
+                       "linkExtensions": [{"id": sg["links"][0]["id"] if isinstance(sg["links"][0], dict)
+                                           else sg["links"][0][0], "parentId": 3}]}
+        r = ondemand.preflight(bp, schemas())
+        self.assertTrue(r["ok"], r["errors"])
+        out = r["source_blueprint"]["definitions"]["subgraphs"][0]
+        self.assertEqual(out["version"], 1)
+        self.assertNotIn("last_node_id", out)
+        self.assertEqual(out["state"]["lastNodeId"], 42)
+        self.assertEqual(out["state"]["lastLinkId"], 7)
+        self.assertEqual(out["state"]["lastRerouteId"], 3)
+        self.assertEqual(out["reroutes"][0]["id"], 3)
+        self.assertNotIn("reroutes", out["extra"])
+        self.assertEqual(out["links"][0]["parentId"], 3)
+        # already-modern definitions are left alone
+        modern = {"id": "x", "version": 1, "state": {"lastNodeId": 5}, "links": []}
+        ondemand._upgrade_definition_schema(modern)
+        self.assertEqual(modern["state"], {"lastNodeId": 5})
 
     def test_proxy_widget_inputs_do_not_become_slots(self):
         # instance inputs beyond the highest -10 slot are promoted widgets,
