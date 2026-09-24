@@ -13,6 +13,7 @@ import hashlib
 import io as _io
 import json
 import logging
+import os
 from contextlib import suppress
 from pathlib import PurePosixPath
 
@@ -78,6 +79,34 @@ def png_bytes_to_tensor(data: bytes):
     img = img.convert("RGBA" if has_alpha else "RGB")
     arr = np.asarray(img).astype("float32") / 255.0
     return torch.from_numpy(arr)[None,]
+
+
+def video_to_bytes(video) -> tuple[bytes, str]:
+    """ComfyUI VIDEO (comfy_api VideoInput) → (container bytes, extension).
+
+    File-backed videos (VideoFromFile, the common case for LoadVideo /
+    downloaded results) are passed through untouched via get_stream_source;
+    anything else (VideoFromComponents, VideoFromList) is encoded to MP4."""
+    source = None
+    getter = getattr(video, "get_stream_source", None)
+    if callable(getter):
+        try:
+            source = getter()
+        except Exception:
+            source = None
+    if isinstance(source, str) and os.path.isfile(source):
+        with open(source, "rb") as f:
+            return f.read(), (os.path.splitext(source)[1].lstrip(".").lower() or "mp4")
+    if hasattr(source, "getvalue"):
+        data = source.getvalue()
+        if data:
+            return data, "mp4"
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="cch-video-") as tmp:
+        path = os.path.join(tmp, "upload.mp4")
+        video.save_to(path)
+        with open(path, "rb") as f:
+            return f.read(), "mp4"
 
 
 def audio_to_flac_bytes(audio) -> bytes:
@@ -286,6 +315,39 @@ async def _wait_for_job(client, job_id, *, poll, timeout, queue_timeout, node_id
     return detail
 
 
+# -- generic runner: instant-node params ---------------------------------------
+
+PARAM_MAP_KEY = "_cch_params"
+_PARAM_COERCE = {"INT": int, "FLOAT": float, "BOOLEAN": bool}
+
+
+def apply_generic_params(prompt: dict, values: dict) -> dict:
+    """Write instant-node param inputs into the prompt they feed.
+
+    The generic prompt carries PARAM_MAP_KEY {name: {targets, type}} (see
+    ondemand._to_generic); `values` are the node's extra execute kwargs —
+    widget values or linked results the frontend sent under the param
+    name. The map is removed from the returned prompt; params without a
+    mapping are ignored (hand-pasted prompts have none)."""
+    prompt = dict(prompt)
+    mapping = prompt.pop(PARAM_MAP_KEY, None) or {}
+    for name, value in values.items():
+        spec = mapping.get(name)
+        if not spec or value is None:
+            continue
+        coerce = _PARAM_COERCE.get(spec.get("type"))
+        try:
+            value = coerce(value) if coerce else value
+        except (TypeError, ValueError):
+            log.warning("param %r: cannot coerce %r to %s", name, value, spec.get("type"))
+            continue
+        for key, iname in spec.get("targets") or []:
+            node = prompt.get(key)
+            if node is not None:
+                node.setdefault("inputs", {})[iname] = value
+    return prompt
+
+
 # -- main pipeline ------------------------------------------------------------
 
 async def run(converted: ConvertedWorkflow, bound_values: dict,
@@ -324,7 +386,7 @@ async def _inject_inputs(client, prompt: dict, converted: ConvertedWorkflow,
                          bound_values: dict) -> None:
     for bi in converted.inputs:
         provided = bi.safe_id in bound_values and bound_values[bi.safe_id] is not None
-        if bi.type in ("IMAGE", "MASK", "AUDIO"):
+        if bi.type in ("IMAGE", "MASK", "AUDIO", "VIDEO"):
             if not provided:
                 _drop_sentinels(prompt, bi.safe_id)
                 continue
@@ -337,6 +399,10 @@ async def _inject_inputs(client, prompt: dict, converted: ConvertedWorkflow,
                 data = audio_to_flac_bytes(value)
                 name = await upload_cached(client, data, f"cch_{bi.safe_id}.flac")
                 loader_key, src = _ensure_audio_loader(prompt, bi.safe_id, name)
+            elif bi.type == "VIDEO":
+                data, ext = video_to_bytes(value)
+                name = await upload_cached(client, data, f"cch_{bi.safe_id}.{ext}")
+                loader_key, src = _ensure_video_loader(prompt, bi.safe_id, name)
             else:
                 data = mask_to_png_bytes(value)
                 name = await upload_cached(client, data, f"cch_{bi.safe_id}.png")
@@ -393,6 +459,13 @@ def _ensure_audio_loader(prompt: dict, safe_id: str, cloud_name: str):
     key = f"cch_load_{safe_id}"
     prompt[key] = {"class_type": "LoadAudio", "inputs": {"audio": cloud_name},
                    "_meta": {"title": f"CloudHybrid Audio Input {safe_id}"}}
+    return key, [key, 0]
+
+
+def _ensure_video_loader(prompt: dict, safe_id: str, cloud_name: str):
+    key = f"cch_load_{safe_id}"
+    prompt[key] = {"class_type": "LoadVideo", "inputs": {"file": cloud_name},
+                   "_meta": {"title": f"CloudHybrid Video Input {safe_id}"}}
     return key, [key, 0]
 
 
@@ -546,6 +619,7 @@ async def run_raw_prompt(prompt: dict, image_tokens: dict[str, "object"],
 
     async with ComfyCloudClient(api_key) as client:
         prompt = copy.deepcopy(prompt)
+        prompt.pop(PARAM_MAP_KEY, None)  # frontend-side metadata, never submitted
         for token, tensor in image_tokens.items():
             if tensor is None:
                 # unconnected slot: drop the placeholder so an optional target

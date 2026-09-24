@@ -35,6 +35,8 @@ def _build_input(bi: BoundInput):
         return io.Mask.Input(bi.safe_id, **common)
     if bi.type == "AUDIO":
         return io.Audio.Input(bi.safe_id, **common)
+    if bi.type == "VIDEO":
+        return io.Video.Input(bi.safe_id, **common)
     if bi.type == "INT":
         default = bi.default if isinstance(bi.default, int) else 0
         # honour the cloud's declared range (seed: 0..2^64-1) so frontend

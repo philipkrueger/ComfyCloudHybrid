@@ -48,7 +48,11 @@ class CloudHybridRunWorkflow(io.ComfyNode):
         )
 
     @classmethod
-    async def execute(cls, workflow_json="", timeout_s=600, **images) -> io.NodeOutput:
+    async def execute(cls, workflow_json="", timeout_s=600, **extra) -> io.NodeOutput:
+        # extra = image_N tensors plus the instant node's param inputs
+        # (frontend-added widgets with input sockets, see web/js)
+        images = {k: v for k, v in extra.items() if k.startswith("image_")}
+        params = {k: v for k, v in extra.items() if k not in images}
         text = (workflow_json or "").strip()
         if not text:
             raise CloudError("No workflow JSON provided.")
@@ -68,6 +72,7 @@ class CloudHybridRunWorkflow(io.ComfyNode):
         if "nodes" in prompt and "links" in prompt:
             raise CloudError("This is the UI workflow format. Please export in "
                              "API format (File → Export (API)).")
+        prompt = executor.apply_generic_params(prompt, params)
         tokens = {token: images.get(f"image_{n}")
                   for n, token in enumerate(TOKENS, start=1)}
         image, video, audio, text = await executor.run_raw_prompt(

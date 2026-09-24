@@ -117,6 +117,7 @@ def register() -> None:
         schemas = rescan_mod.build_schema_source()
 
         report = await asyncio.to_thread(ondemand.preflight, blueprint, schemas)
+        await asyncio.to_thread(ondemand.dump_last_convert, blueprint, mode, report)
 
         if mode == "save":
             if not report.get("ok"):

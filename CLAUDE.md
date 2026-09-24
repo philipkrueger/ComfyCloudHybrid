@@ -48,7 +48,8 @@ ausgeführt — Inputs hochladen, Job pollen, Bilder zurückladen.
 
 ## Bekannte Grenzen
 
-- Subgraph-Grenzen: rein IMAGE/MASK/AUDIO (FLAC-Upload→LoadAudio)/Werte
+- Subgraph-Grenzen: rein IMAGE/MASK/AUDIO (FLAC-Upload→LoadAudio)/VIDEO
+  (MP4-Upload→LoadVideo)/Werte
   (nicht übertragbare Input-Typen wie BOUNDING_BOX werden gedroppt, wenn alle
   Ziele optional sind). Raus: IMAGE (RGBA bleibt 4-kanalig), MASK
   (MaskToImage→SaveImage), VIDEO,

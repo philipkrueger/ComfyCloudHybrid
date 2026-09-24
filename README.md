@@ -93,19 +93,21 @@ Right-click any **subgraph** on the canvas → two entries:
 
 - **☁ Convert to Cloud API Node (test)** — validates the subgraph and, if it
   can run on the cloud, offers **Replace subgraph** (swap it in place: image
-  links and IMAGE outputs are rewired automatically) or **Insert next to it**
-  — a pre-filled *☁ Run Cloud Workflow* node (image inputs mapped to
-  `%CCH_IMAGE_N%`; every value input of the subgraph — prompts, seeds,
-  combos — stays available as an editable widget whose changes sync into the
-  workflow JSON). No restart — good for quickly testing a segment you carved
-  out of a template into a subgraph.
+  links, value links and the IMAGE / VIDEO / AUDIO / TEXT outputs are rewired
+  automatically) or **Insert next to it** — a pre-filled *☁ Run Cloud
+  Workflow* node (image inputs mapped to `%CCH_IMAGE_N%`; every value input
+  of the subgraph — prompts, seeds, combos — stays available as an editable
+  widget that also has an input socket, so you can link a primitive or
+  another node's output into it just like on the original subgraph). No
+  restart — good for quickly testing a segment you carved out of a template
+  into a subgraph.
 - **☁ Save as Cloud Node (permanent)** — persists the subgraph under
   `saved_blueprints/` and, after a ComfyUI restart, registers it as a proper
   named cloud node with all its inputs (the full-fidelity path; the instant
-  node only carries up to four image inputs).
+  node carries up to eight image inputs).
 - **⟲ Convert back to subgraph** — right-click an instant test node to undo
   the conversion: the original subgraph (stored inside the node) is rebuilt
-  in place, image and IMAGE-output links are rewired, definitions are
+  in place, image, value and output links are rewired, definitions are
   re-registered if the Replace removed them. Parameters edited on the test
   node are not carried back.
 
@@ -119,7 +121,9 @@ nodes apply — models referenced inside the subgraph must exist on Comfy Cloud.
 ## Limits & behavior
 
 - Inputs: IMAGE/MASK, **AUDIO** (encoded as lossless FLAC, uploaded, loaded
-  via LoadAudio) and value types (STRING/INT/FLOAT/BOOLEAN/COMBO).
+  via LoadAudio), **VIDEO** (file-backed videos are uploaded as they are,
+  others encoded to MP4; loaded via LoadVideo) and value types
+  (STRING/INT/FLOAT/BOOLEAN/COMBO).
   Non-transferable input types (e.g. BOUNDING_BOX) are dropped with a hint as
   long as every input they feed is optional in the cloud.
   Outputs: IMAGE, **MASK** (saved as a grayscale image, returned as a MASK

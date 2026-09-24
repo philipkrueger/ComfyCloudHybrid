@@ -32,7 +32,7 @@ log = logging.getLogger("ComfyCloudHybrid")
 # Classes whose "image" widget references a file in the input directory that
 # must be uploaded to the cloud before the job runs.
 UPLOAD_CLASSES = {"LoadImage": "image", "LoadImageMask": "image",
-                  "LoadAudio": "audio"}
+                  "LoadAudio": "audio", "LoadVideo": "file"}
 
 # Pure pass-through nodes the cloud does not expose as executable classes —
 # collapsed during flattening (link resolution follows through them). Only
@@ -156,6 +156,9 @@ def convert(blueprint: dict, schemas: SchemaSource, fallback_name: str = "") -> 
             bi_type = "MASK"
         elif "AUDIO" in parts:
             bi_type = "AUDIO"
+        elif "VIDEO" in parts:
+            # uploaded as MP4 and fed through a cloud LoadVideo node
+            bi_type = "VIDEO"
         elif any(p in VALUE_TYPES for p in parts):
             # COMBO slots (model selectors like unet_name) stay COMBO — their
             # options are resolved from the cloud schema of the target input
@@ -199,9 +202,9 @@ def convert(blueprint: dict, schemas: SchemaSource, fallback_name: str = "") -> 
         else:
             raise UnsupportedTypeError(
                 f"Subgraph input '{bi.name}' has type {bi.type} — only IMAGE/MASK/"
-                "STRING/INT/FLOAT/BOOLEAN cross the cloud boundary, and a required "
-                "input depends on it. Rework the subgraph so only images or values "
-                "pass the boundary (VAEDecode/Encode inside the subgraph).")
+                "VIDEO/AUDIO/STRING/INT/FLOAT/BOOLEAN cross the cloud boundary, and "
+                "a required input depends on it. Rework the subgraph so only media "
+                "or values pass the boundary (VAEDecode/Encode inside the subgraph).")
 
     # -- boundary outputs -> SaveImage nodes --------------------------------
     outputs: list[BoundOutput] = []

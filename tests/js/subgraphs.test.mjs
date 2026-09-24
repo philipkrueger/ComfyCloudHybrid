@@ -29,11 +29,21 @@ function setup() {
         setDirtyCanvas() {},
     };
     function makeNode(type) {
+        const generic = type === "CloudHybrid_RunWorkflow";
         return {
             type, pos: [10, 20], properties: {},
-            inputs: [{ name: type === "CloudHybrid_RunWorkflow" ? "image_1" : "image", link: null }],
-            outputs: [{ name: "IMAGE", type: "IMAGE", links: [] }],
+            inputs: [{ name: generic ? "image_1" : "image", link: null }],
+            outputs: generic
+                ? [{ name: "IMAGE", type: "IMAGE", links: [] }, { name: "VIDEO", type: "VIDEO", links: [] },
+                   { name: "AUDIO", type: "AUDIO", links: [] }, { name: "TEXT", type: "STRING", links: [] }]
+                : [{ name: "IMAGE", type: "IMAGE", links: [] }, { name: "VIDEO", type: "VIDEO", links: [] }],
             widgets: [{ name: "workflow_json", value: "" }],
+            addWidget(kind, name, value, callback, options) {
+                const w = { type: kind, name, value, callback, options }; this.widgets.push(w); return w;
+            },
+            addInput(name, type, extra) {
+                const inp = { name, type, link: null, ...(extra || {}) }; this.inputs.push(inp); return inp;
+            },
             configure(data) { Object.assign(this, structuredClone(data)); },
             connect(output, target, input) {
                 assert.equal(this.graph, target.graph, "must connect within the owning graph");
@@ -58,9 +68,11 @@ function setup() {
     const origin = makeNode("origin");
     const subgraph = makeNode("subgraph-id");
     const target = makeNode("target");
-    for (const node of [origin, subgraph, target]) graph.add(node);
+    const videoTarget = makeNode("SaveVideo");
+    for (const node of [origin, subgraph, target, videoTarget]) graph.add(node);
     origin.connect(0, subgraph, 0);
     subgraph.connect(0, target, 0);
+    subgraph.connect(1, videoTarget, 0);
     root.subgraphs.set(subgraph.type, {});
     const blueprint = {
         nodes: [{ id: subgraph.id, type: subgraph.type,
@@ -69,7 +81,7 @@ function setup() {
     };
     const report = { name: "Nested", generic_json: "{}", baked_inputs: [],
         image_inputs: [{ name: "image", token: "%CCH_IMAGE_1%" }] };
-    return { ...context.actions, root, graph, origin, subgraph, target, blueprint, report, errors };
+    return { ...context.actions, root, graph, origin, subgraph, target, videoTarget, blueprint, report, errors };
 }
 
 test("insert uses the source's graph even when the root graph is displayed", () => {
@@ -90,6 +102,10 @@ test("replace and restore preserve nested IMAGE connections and assigned ids", (
     assert.ok(!s.graph.nodes.has(s.subgraph.id));
     assert.equal(s.graph.links.get(cloud.inputs[0].link).origin_id, s.origin.id);
     assert.equal(s.graph.links.get(s.target.inputs[0].link).origin_id, cloud.id);
+    // a VIDEO consumer moves onto the generic node's VIDEO output, not IMAGE
+    const videoLink = s.graph.links.get(s.videoTarget.inputs[0].link);
+    assert.equal(videoLink.origin_id, cloud.id);
+    assert.equal(videoLink.origin_slot, 1);
     s.restoreSubgraph(cloud);
     const restored = [...s.graph.nodes.values()].find(n => n.type === "subgraph-id");
     assert.ok(restored);
@@ -97,6 +113,9 @@ test("replace and restore preserve nested IMAGE connections and assigned ids", (
     assert.ok(!s.graph.nodes.has(cloud.id));
     assert.equal(s.graph.links.get(restored.inputs[0].link).origin_id, s.origin.id);
     assert.equal(s.graph.links.get(s.target.inputs[0].link).origin_id, restored.id);
+    const restoredVideo = s.graph.links.get(s.videoTarget.inputs[0].link);
+    assert.equal(restoredVideo.origin_id, restored.id);
+    assert.equal(restoredVideo.origin_slot, 1);
     assert.deepEqual(s.errors, []);
 });
 
@@ -132,9 +151,39 @@ test("restore re-creates a dropped definition without moving shared id counters 
     assert.deepEqual(s.errors, []);
 });
 
+test("params become input sockets and linked values move on replace/restore", () => {
+    const s = setup();
+    // the subgraph exposes a promoted 'steps' widget input fed by a primitive
+    const promoted = { name: "steps_1", label: "steps", type: "INT", link: null, widget: { name: "steps_1" } };
+    s.subgraph.inputs.push(promoted);
+    s.blueprint.nodes[0].inputs.push(structuredClone(promoted));  // stored source mirrors the instance
+    const prim = { type: "PrimitiveInt", pos: [0, 0], properties: {}, inputs: [], widgets: [],
+        outputs: [{ name: "INT", type: "INT", links: [] }],
+        connect: s.origin.connect };
+    s.graph.add(prim);
+    prim.connect(0, s.subgraph, 1);
+    s.report.baked_inputs = [{ name: "steps", value: 25, type: "INT", targets: [["5", "steps"]] }];
+    s.replaceWithGenericNode(s.subgraph, s.report, s.blueprint);
+    const cloud = [...s.graph.nodes.values()].find(n => n.type === "CloudHybrid_RunWorkflow");
+    const socket = cloud.inputs.find(i => i.name === "steps");
+    assert.ok(socket, "param input socket missing");
+    assert.equal(socket.type, "INT");
+    assert.equal(JSON.stringify(socket.widget), JSON.stringify({ name: "steps" }));
+    assert.ok(cloud.widgets.find(w => w.name === "steps"), "param widget missing");
+    assert.equal(s.graph.links.get(socket.link).origin_id, prim.id);
+    // a prompt from an older backend gains the param map the runtime needs
+    const json = JSON.parse(cloud.widgets.find(w => w.name === "workflow_json").value);
+    assert.equal(JSON.stringify(json._cch_params), JSON.stringify({ steps: { targets: [["5", "steps"]], type: "INT" } }));
+    s.restoreSubgraph(cloud);
+    const restored = [...s.graph.nodes.values()].find(n => n.type === "subgraph-id");
+    const back = restored.inputs.find(i => i.label === "steps");
+    assert.equal(s.graph.links.get(back.link).origin_id, prim.id);
+    assert.deepEqual(s.errors, []);
+});
+
 test("a removed source cannot insert into an unrelated active graph", () => {
     const s = setup();
     s.graph.remove(s.subgraph);
     s.insertGenericNode(s.subgraph, s.report, s.blueprint);
-    assert.equal(s.graph.nodes.size, 2);
+    assert.equal(s.graph.nodes.size, 3);  // origin, target, videoTarget — no cloud node
 });

@@ -275,6 +275,29 @@ class TestOptionalInputs(unittest.TestCase):
         self.assertEqual(cw.prompt["99:1:5"]["inputs"]["images.image_2"], [SENTINEL, "image_2"])
 
 
+class TestVideoInput(unittest.TestCase):
+    def test_video_boundary_input_becomes_upload_slot(self):
+        # a VIDEO slot crosses the boundary as an MP4 upload fed through
+        # a cloud LoadVideo node (the executor inserts it at run time)
+        bp = load("nested_subgraph.json")
+        outer, inner = bp["definitions"]["subgraphs"]
+        for slot in (bp["nodes"][0]["inputs"][0], outer["inputs"][0], outer["nodes"][0]["inputs"][0],
+                     inner["inputs"][0]):
+            slot["type"] = "VIDEO"
+            slot["name"] = "video"
+        node = inner["nodes"][0]
+        node["type"] = "FakeVideoProc"
+        node["inputs"] = [{"name": "video", "type": "VIDEO", "link": 20}]
+        node["widgets_values"] = []
+        for link in outer["links"] + inner["links"]:
+            if link["origin_id"] == -10:
+                link["type"] = "VIDEO"
+        cw = convert(bp, schemas())
+        self.assertEqual([(i.name, i.type, i.kind) for i in cw.inputs], [("video", "VIDEO", "slot")])
+        self.assertEqual(cw.prompt["99:1:5"]["inputs"]["video"], [SENTINEL, "video"])
+        self.assertEqual(cw.outputs[0].type, "IMAGE")
+
+
 class TestVideoOutput(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

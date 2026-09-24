@@ -32,6 +32,10 @@ from .converter.schema_source import SchemaSource
 
 log = logging.getLogger("ComfyCloudHybrid")
 
+# top-level key of a generic prompt that maps instant-node param inputs to
+# the prompt inputs they feed (see executor.apply_generic_params)
+PARAM_MAP_KEY = "_cch_params"
+
 # the generic runner exposes this many optional image inputs (nodes_generic.py
 # builds its schema from the same list)
 MAX_GENERIC_IMAGES = 8
@@ -40,6 +44,9 @@ GENERIC_TOKENS = [f"%CCH_IMAGE_{n}%" for n in range(1, MAX_GENERIC_IMAGES + 1)]
 # on an unexpected conversion crash the exact payload is preserved here so a
 # bug report carries the real live-frontend structure, not a guess
 DEBUG_DUMP = config.CACHE_DIR / "convert_debug.json"
+# the most recent convert request + report, for reproducing "my subgraph
+# converts wrong" without the live canvas at hand
+LAST_CONVERT = config.CACHE_DIR / "convert_last.json"
 
 _LINK_KEYS = ("id", "origin_id", "origin_slot", "target_id", "target_slot", "type")
 
@@ -182,6 +189,17 @@ def _attach_boundary_link_ids(sg: dict, links: list[dict]) -> None:
             slot["linkIds"] = [l["id"] for l in links
                                if l.get(id_key) == node_id and l.get(slot_key) == k
                                and l.get("id") is not None]
+
+
+def dump_last_convert(blueprint: dict, mode: str, report: dict) -> None:
+    """Persist the last convert payload + report (fail-soft, never raises)."""
+    try:
+        config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        with open(LAST_CONVERT, "w", encoding="utf-8") as f:
+            json.dump({"mode": mode, "report": report, "blueprint": blueprint},
+                      f, ensure_ascii=False, indent=1)
+    except Exception as e:
+        log.warning("could not write %s: %s", LAST_CONVERT, e)
 
 
 def _dump_debug(blueprint: dict, err_text: str) -> str | None:
@@ -395,6 +413,11 @@ def _to_generic(cw: ConvertedWorkflow) -> dict:
         return {"instant_testable": False, "generic_reason": "; ".join(reasons),
                 "generic_warnings": warnings,
                 "image_inputs": image_inputs, "baked_inputs": baked}
+    # name -> targets/type, so a value LINKED into the instant node's param
+    # input at run time can be written into the prompt (executor strips it)
+    if baked:
+        prompt[PARAM_MAP_KEY] = {b["name"]: {"targets": b["targets"], "type": b["type"]}
+                                 for b in baked}
     return {"instant_testable": True,
             "generic_json": json.dumps(prompt, indent=2),
             "generic_warnings": warnings,

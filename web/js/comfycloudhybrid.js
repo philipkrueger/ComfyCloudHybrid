@@ -186,9 +186,20 @@ function setJsonParam(node, targets, type, value) {
     w.value = JSON.stringify(prompt, null, 2);
 }
 
+// Slot type of a param input socket; combos also take plain strings.
+const PARAM_INPUT_TYPES = { INT: "INT", FLOAT: "FLOAT", BOOLEAN: "BOOLEAN",
+    STRING: "STRING", COMBO: "COMBO,STRING" };
+
 function addParamWidgets(node, params) {
     for (const p of params || []) {
         if (!p.targets?.length) continue;
+        // every param is also an input socket, so a value can be linked in
+        // (the frontend sends it under the param name; the backend maps it
+        // through the prompt's _cch_params). Inputs survive serialization,
+        // widgets are re-created on load — add each only when missing.
+        if (!node.inputs?.some((i) => i.name === p.name)) {
+            node.addInput(p.name, PARAM_INPUT_TYPES[p.type] || "*", { widget: { name: p.name } });
+        }
         if (node.widgets?.some((w) => w.name === p.name)) continue;
         const cb = (v) => setJsonParam(node, p.targets, p.type, v);
         if (p.type === "BOOLEAN") {
@@ -208,7 +219,23 @@ function addParamWidgets(node, params) {
     }
     node.properties = node.properties || {};
     node.properties.cchParams = params;
+    ensureParamMap(node, params);
     if (node.computeSize) node.size = node.computeSize();
+}
+
+// The backend applies linked param values through the prompt's _cch_params
+// map. Nodes converted by an older backend carry none — rebuild it from the
+// stored params so their sockets work too.
+function ensureParamMap(node, params) {
+    const w = node.widgets?.find((x) => x.name === "workflow_json");
+    if (!w || !params?.length) return;
+    let prompt;
+    try { prompt = JSON.parse(w.value); } catch (e) { return; }
+    if (!prompt || typeof prompt !== "object" || prompt._cch_params) return;
+    prompt._cch_params = Object.fromEntries(params
+        .filter((p) => p.targets?.length)
+        .map((p) => [p.name, { targets: p.targets, type: p.type }]));
+    w.value = JSON.stringify(prompt, null, 2);
 }
 
 // Create the pre-filled generic runner node (not yet positioned/wired).
@@ -242,6 +269,22 @@ function createGenericNode(report, blueprint, graph) {
     return node;
 }
 
+// Move links feeding value params between a subgraph instance and the
+// instant node (either direction): matched by param name against the
+// other node's input name or label (promoted inputs carry the label).
+function moveParamLinks(graph, fromNode, toNode, params) {
+    for (const p of params || []) {
+        const srcIdx = (fromNode.inputs || []).findIndex(
+            (inp) => inp.name === p.name || inp.label === p.name);
+        const linkId = srcIdx >= 0 ? fromNode.inputs[srcIdx].link : null;
+        const link = getLink(graph, linkId);
+        const origin = link && graph.getNodeById(link.origin_id);
+        const dstIdx = (toNode.inputs || []).findIndex(
+            (inp) => inp.name === p.name || inp.label === p.name);
+        if (origin && dstIdx >= 0) origin.connect(link.origin_slot, toNode, dstIdx);
+    }
+}
+
 function getLink(graph, id) {
     const links = graph.links;
     if (!links || id == null) return null;
@@ -262,9 +305,14 @@ function insertGenericNode(sourceNode, report, blueprint) {
         (imgs ? ` Connect image inputs: ${imgs}.` : ""));
 }
 
+// The generic runner's fixed outputs, by the slot type they carry. Subgraph
+// outputs of these types are rewired onto them on Replace (and back on
+// Restore); anything else (MASK, INT, …) has no matching slot.
+const GENERIC_OUTPUT_INDEX = { IMAGE: 0, VIDEO: 1, AUDIO: 2, STRING: 3 };
+
 // Swap the subgraph for the generic node: rewire incoming image links to
-// image_1…N (by boundary-input name), move IMAGE-output links onto the
-// generic node's single IMAGE output, then remove the subgraph.
+// image_1…N (by boundary-input name), move output links onto the generic
+// node's output of the same type, then remove the subgraph.
 function replaceWithGenericNode(sourceNode, report, blueprint) {
     const graph = sourceNode.graph;
     if (!graph) return;
@@ -282,13 +330,14 @@ function replaceWithGenericNode(sourceNode, report, blueprint) {
                 (inp) => inp.name === `image_${i + 1}`);
             if (origin && dstIdx >= 0) origin.connect(link.origin_slot, node, dstIdx);
         });
-        const imgOut = (sourceNode.outputs || []).findIndex((o) => o.type === "IMAGE");
-        (sourceNode.outputs || []).forEach((out, oi) => {
+        moveParamLinks(graph, sourceNode, node, report.baked_inputs);
+        (sourceNode.outputs || []).forEach((out) => {
+            const genericIdx = GENERIC_OUTPUT_INDEX[out.type];
             for (const lid of [...(out.links || [])]) {
                 const link = getLink(graph, lid);
                 const target = link && graph.getNodeById(link.target_id);
                 if (!target) continue;
-                if (oi === imgOut) node.connect(0, target, link.target_slot);
+                if (genericIdx != null) node.connect(genericIdx, target, link.target_slot);
                 else skipped.push(out.label || out.name || out.type);
             }
         });
@@ -542,10 +591,12 @@ function restoreSubgraph(cloudNode) {
                 (x) => x.label === map.name || x.name === map.name);
             if (origin && dIdx >= 0) origin.connect(link.origin_slot, inst, dIdx);
         });
-        // IMAGE-output links back onto the subgraph's first IMAGE output
-        const outIdx = (inst.outputs || []).findIndex((o) => o.type === "IMAGE");
-        const clOut = (cloudNode.outputs || [])[0];
-        if (outIdx >= 0 && clOut) {
+        moveParamLinks(graph, cloudNode, inst, cloudNode.properties?.cchParams);
+        // output links back onto the subgraph's first output of the same type
+        for (const [type, cIdx] of Object.entries(GENERIC_OUTPUT_INDEX)) {
+            const clOut = (cloudNode.outputs || [])[cIdx];
+            const outIdx = (inst.outputs || []).findIndex((o) => o.type === type);
+            if (!clOut || outIdx < 0) continue;
             for (const lid of [...(clOut.links || [])]) {
                 const link = getLink(graph, lid);
                 const target = link && graph.getNodeById(link.target_id);

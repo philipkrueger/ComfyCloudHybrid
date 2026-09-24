@@ -96,3 +96,37 @@ class TestWidgetMapping(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestNamedWidgetValues(unittest.TestCase):
+    """Frontend >= 1.5 serialises widgets_values_named alongside the list."""
+
+    def test_named_values_win_over_positional_guessing(self):
+        # BlockSparseAttention-style: a dynamic-combo child sits between the
+        # combo and the next widget, so positional mapping shifts every value
+        node = {"type": "FakeDynamic", "inputs": [{"name": "model", "link": 1}],
+                "widgets_values": ["sla", 10, 0.2, 5, "randomize"],
+                "widgets_values_named": {"selection": "sla", "selection.keep_percent": 10,
+                                         "start_percent": 0.2, "seed": 5,
+                                         "control_after_generate": "randomize"}}
+        out = map_widgets(node, schema_entry=CLOUD_OBJECT_INFO["FakeDynamic"])
+        self.assertEqual(out, {"selection": "sla", "selection.keep_percent": 10,
+                               "start_percent": 0.2, "seed": 5})
+
+    def test_named_unknown_and_duplicate_keys_are_dropped(self):
+        node = {"type": "FakeDynamic", "inputs": [],
+                "widgets_values_named": {"selection": "sla", "bogus": 1,
+                                         "seed#1": 7, "seed.control_after_generate": "fixed"}}
+        out = map_widgets(node, schema_entry=CLOUD_OBJECT_INFO["FakeDynamic"])
+        self.assertEqual(out, {"selection": "sla"})
+
+    def test_named_values_without_schema_pass_through(self):
+        node = {"type": "UnknownClass", "inputs": [],
+                "widgets_values_named": {"a": 1, "control_after_generate": "fixed"}}
+        self.assertEqual(map_widgets(node, schema_entry={}), {"a": 1})
+
+    def test_named_values_used_even_when_list_is_empty(self):
+        node = {"type": "FakeDynamic", "inputs": [], "widgets_values": [],
+                "widgets_values_named": {"start_percent": 0.5}}
+        self.assertEqual(map_widgets(node, schema_entry=CLOUD_OBJECT_INFO["FakeDynamic"]),
+                         {"start_percent": 0.5})

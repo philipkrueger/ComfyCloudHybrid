@@ -269,6 +269,24 @@ class ExecutorTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(submitted["35:34"]["inputs"]["image"].startswith("hashed_"))
         self.assertGreaterEqual(self.mock.polls, 3)
 
+    async def test_video_input_uploaded_and_fed_through_loadvideo(self):
+        cw = ConvertedWorkflow(
+            name="vid",
+            prompt={"v1": {"class_type": "FakeVideoProc",
+                           "inputs": {"video": [SENTINEL, "clip"]}},
+                    "cch_save_0": {"class_type": "SaveImage",
+                                   "inputs": {"images": ["v1", 0], "filename_prefix": "x"}}},
+            inputs=[BoundInput(name="clip", safe_id="clip", type="VIDEO",
+                               kind="slot", targets=[("v1", "video")])],
+            outputs=[BoundOutput(name="IMAGE", type="IMAGE", save_node_key="cch_save_0")],
+            required_uploads=[])
+        await executor.run(cw, {"clip": _FakeVideo(io.BytesIO(b"mp4-bytes"))}, timeout_s=30)
+        self.assertEqual(self.mock.uploads[0], ("cch_clip.mp4", len(b"mp4-bytes")))
+        submitted = self.mock.submitted[0]["prompt"]
+        self.assertEqual(submitted["v1"]["inputs"]["video"], ["cch_load_clip", 0])
+        self.assertEqual(submitted["cch_load_clip"]["class_type"], "LoadVideo")
+        self.assertTrue(submitted["cch_load_clip"]["inputs"]["file"].startswith("hashed_"))
+
     async def test_upload_dedupe(self):
         import torch
         image = torch.zeros((1, 4, 4, 3), dtype=torch.float32)
@@ -425,6 +443,35 @@ class ExecutorTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("%CCH_IMAGE_2%", json.dumps(sent))
 
 
+class _FakeVideo:
+    """Minimal comfy_api VideoInput stand-in."""
+    def __init__(self, source=None, encoded=b"encoded-mp4"):
+        self._source, self._encoded = source, encoded
+
+    def get_stream_source(self):
+        if self._source is None:
+            raise RuntimeError("not file backed")
+        return self._source
+
+    def save_to(self, path, **kwargs):
+        with open(path, "wb") as f:
+            f.write(self._encoded)
+
+
+class VideoInputTest(unittest.TestCase):
+    def test_file_backed_video_passes_through_with_its_extension(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "clip.mov"
+            path.write_bytes(b"mov-bytes")
+            self.assertEqual(executor.video_to_bytes(_FakeVideo(str(path))), (b"mov-bytes", "mov"))
+
+    def test_buffer_backed_video_is_sent_as_mp4(self):
+        self.assertEqual(executor.video_to_bytes(_FakeVideo(io.BytesIO(b"buf"))), (b"buf", "mp4"))
+
+    def test_component_video_is_encoded_via_save_to(self):
+        self.assertEqual(executor.video_to_bytes(_FakeVideo()), (b"encoded-mp4", "mp4"))
+
+
 class ImageDecodeTest(unittest.TestCase):
     def _png(self, mode, color):
         from PIL import Image
@@ -451,6 +498,25 @@ class ImageDecodeTest(unittest.TestCase):
         self.assertEqual(tuple(out.shape), (2, 2, 2, 4))
         self.assertEqual(float(out[0, ..., 3].min()), 1.0)
         self.assertEqual(float(out[1, ..., 3].max()), 0.0)
+
+
+class GenericParamsTest(unittest.TestCase):
+    def test_linked_params_are_written_and_map_is_stripped(self):
+        prompt = {"_cch_params": {"steps": {"targets": [["9", "steps"]], "type": "INT"},
+                                  "prompt": {"targets": [["104", "prompt"], ["105", "text"]], "type": "STRING"}},
+                  "9": {"class_type": "BasicScheduler", "inputs": {"steps": 8}},
+                  "104": {"class_type": "Enc", "inputs": {"prompt": "old"}},
+                  "105": {"class_type": "Enc", "inputs": {"text": "old"}}}
+        out = executor.apply_generic_params(prompt, {"steps": 12.0, "prompt": "new", "unknown": 1, "seed": None})
+        self.assertNotIn("_cch_params", out)
+        self.assertEqual(out["9"]["inputs"]["steps"], 12)          # coerced to INT
+        self.assertEqual(out["104"]["inputs"]["prompt"], "new")
+        self.assertEqual(out["105"]["inputs"]["text"], "new")
+        self.assertIn("_cch_params", prompt)                        # input untouched
+
+    def test_prompt_without_map_passes_through(self):
+        prompt = {"1": {"class_type": "SaveImage", "inputs": {}}}
+        self.assertEqual(executor.apply_generic_params(prompt, {"x": 1}), prompt)
 
 
 class JobCancellationTest(unittest.IsolatedAsyncioTestCase):

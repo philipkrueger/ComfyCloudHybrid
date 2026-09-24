@@ -78,6 +78,25 @@ CLOUD_OBJECT_INFO = {
                              "min": 1}}]}},
         "output": ["IMAGE"],
     },
+    "FakeDynamic": {
+        # V3 DynamicCombo: children reach the prompt as dotted keys
+        "input": {"required": {
+            "model": ["MODEL", {}],
+            "selection": ["COMFY_DYNAMICCOMBO_V3", {"options": [
+                {"key": "sla", "inputs": {"required": {"keep_percent": ["FLOAT", {"default": 10.0}]}}},
+                {"key": "sol", "inputs": {"required": {"tau": ["FLOAT", {"default": 1.3}]}}}]}],
+            "start_percent": ["FLOAT", {"default": 0.0}],
+            "seed": ["INT", {"default": 0, "control_after_generate": True}]}},
+        "output": ["MODEL"],
+    },
+    "FakeVideoProc": {
+        "input": {"required": {"video": ["VIDEO", {}]}},
+        "output": ["IMAGE"],
+    },
+    "LoadVideo": {
+        "input": {"required": {"file": ["COMBO", {"video_upload": True, "options": []}]}},
+        "output": ["VIDEO"],
+    },
     "PrimitiveInt": {
         "input": {"required": {
             "value": ["INT", {"default": 0, "min": -2147483648, "max": 2147483647,

@@ -23,5 +23,5 @@ __all__ = [
     "UnsupportedTypeError",
 ]
 
-CONVERTER_VERSION = 19
+CONVERTER_VERSION = 21
 """Bump on any change to conversion output — busts the converted-workflow cache."""

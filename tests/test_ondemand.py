@@ -43,6 +43,13 @@ class TestPreflightValid(unittest.TestCase):
         names = {b["name"] for b in r["baked_inputs"]}
         self.assertIn("fps", names)
 
+    def test_generic_json_carries_param_map_for_linked_inputs(self):
+        r = ondemand.preflight(load("video_blueprint.json"), schemas())
+        prompt = json.loads(r["generic_json"])
+        pmap = prompt[ondemand.PARAM_MAP_KEY]
+        for b in r["baked_inputs"]:
+            self.assertEqual(pmap[b["name"]], {"targets": b["targets"], "type": b["type"]})
+
     def test_baked_inputs_carry_widget_metadata(self):
         # the frontend builds editable widgets from these entries: they must
         # name the type and the JSON targets the value is written to

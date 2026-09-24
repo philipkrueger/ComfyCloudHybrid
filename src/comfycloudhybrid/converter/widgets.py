@@ -69,6 +69,37 @@ def required_widget_defaults(schema_entry: dict) -> dict[str, Any]:
     return out
 
 
+def dynamic_input_names(schema_entry: dict) -> set[str]:
+    """Names of V3 dynamic inputs (DynamicCombo / Autogrow / MatchType).
+
+    Their children reach the API prompt as dotted keys, e.g.
+    `selection.keep_percent` or `images.image_2` — object_info describes
+    only the parent, so the children cannot be listed statically."""
+    inp = schema_entry.get("input") or {}
+    return {name for section in ("required", "optional")
+            for name, spec in (inp.get(section) or {}).items()
+            if isinstance(spec, list) and spec and isinstance(spec[0], str)
+            and spec[0].startswith("COMFY_")}
+
+
+def _from_named(named: dict, names, schema_opts: dict, dynamic: set[str]) -> dict:
+    """Frontend >= 1.5 serialises `widgets_values_named` {input_name: value}
+    next to the positional list. It is authoritative: no control/upload
+    pseudo slots to skip, and dynamic-combo children carry their dotted
+    prompt key. Unknown keys are dropped when the class is known at all."""
+    known = set(names or []) | set(schema_opts) | dynamic
+    out = {}
+    for key, value in named.items():
+        if "#" in key:  # duplicate-name disambiguation, cannot map to an input
+            continue
+        if key == "control_after_generate" or key.endswith(".control_after_generate"):
+            continue
+        if known and key not in known and key.split(".")[0] not in known:
+            continue
+        out[key] = value
+    return out
+
+
 def _is_widget(typ, opts: dict) -> bool:
     if opts.get("forceInput"):
         return False
@@ -113,19 +144,25 @@ def map_widgets(node_or_class, widgets_values=None, schema_entry: dict | None = 
         class_type = node_or_class
         names = None
 
-    if not widgets_values:
+    has_named = bool(node and isinstance(node.get("widgets_values_named"), dict)
+                     and node.get("widgets_values_named"))
+    if not widgets_values and not has_named:
         return {}
-    if isinstance(widgets_values, list) and all(v is None for v in widgets_values):
+    if (isinstance(widgets_values, list) and widgets_values
+            and all(v is None for v in widgets_values) and not has_named):
         return {}  # preview/display nodes serialize placeholder None widgets
     schema_entry = schema_entry or {}
     schema_widgets = widget_inputs_of(schema_entry)
     schema_opts = {nm: (t, o) for nm, t, o in schema_widgets}
+    dynamic = dynamic_input_names(schema_entry)
 
     if class_type in QUIRKS:
         return QUIRKS[class_type](widgets_values, schema_widgets)
+    named = node.get("widgets_values_named") if node else None
+    if isinstance(named, dict) and named:
+        return _from_named(named, names, schema_opts, dynamic)
     if isinstance(widgets_values, dict):
-        valid = set(names or []) | set(schema_opts)
-        return {k: v for k, v in widgets_values.items() if k in valid}
+        return _from_named(widgets_values, names, schema_opts, dynamic)
 
     # widget order: node's own inputs array preferred, else schema order
     from_node = names is not None
